@@ -1,0 +1,118 @@
+# Docker Compose конфигурация для приложения анализа статистики футболистов
+version: '3.8'
+
+services:
+  # PostgreSQL база данных
+  db:
+    image: postgres:15-alpine
+    container_name: football_stats_db
+    restart: unless-stopped
+    environment:
+      # Используем заданные пользователем настройки подключения
+      POSTGRES_USER: klim
+      POSTGRES_PASSWORD: Orel1997
+      POSTGRES_DB: football_stats
+    ports:
+      - "5432:5432"
+    volumes:
+      # Инициализационные скрипты
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+      # Постоянное хранение данных
+      - postgres_data:/var/lib/postgresql/data
+      # Общий том для Excel файлов
+      - ./uploads:/uploads
+    networks:
+      - football_network
+
+  # FastAPI бэкенд
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: football_stats_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Настройки подключения к БД
+      DATABASE_URL: postgresql://klim:Orel1997@db:5432/football_stats
+      # Настройки приложения
+      ENVIRONMENT: development
+      DEBUG: "true"
+      # Путь для загруженных файлов
+      UPLOAD_PATH: /uploads
+    volumes:
+      # Разработка: монтируем код для hot reload
+      - ./backend:/app
+      # Общий том для Excel файлов
+      - ./uploads:/uploads
+    depends_on:
+      - db
+    networks:
+      - football_network
+    # Команда для запуска с автоперезагрузкой в режиме разработки
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # React фронтенд
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: football_stats_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # URL бэкенда для API запросов
+      REACT_APP_API_BASE_URL: http://localhost:8000/api
+      # Отключаем проверку TypeScript для dev режима
+      TSC_COMPILE_ON_ERROR: true
+    volumes:
+      # Разработка: монтируем код для hot reload
+      - ./frontend:/app
+      # Исключаем node_modules из монтирования
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - football_network
+    # Команда для запуска в режиме разработки
+    command: npm start
+
+  # Adminer для управления БД (опционально, для разработки)
+  adminer:
+    image: adminer:4.8.1
+    container_name: football_stats_adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    networks:
+      - football_network
+    # Подключение: System=PostgreSQL, Server=db, Username=klim, Password=Orel1997, Database=football_stats
+
+# Сеть для связи между контейнерами
+networks:
+  football_network:
+    driver: bridge
+
+# Постоянные тома для данных
+volumes:
+  postgres_data:
+    driver: local
+  uploads:
+    driver: local
+
+# Дополнительные настройки для производства
+# Раскомментируйте и настройте при деплое
+# x-production-overrides:
+#   &production-overrides
+#   restart: always
+#   environment:
+#     ENVIRONMENT: production
+#     DEBUG: "false"
+#   volumes: []  # Отключить монтирование кода
+#   command: []  # Использовать команды по умолчанию из Dockerfile
+
+
