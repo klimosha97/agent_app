@@ -66,7 +66,7 @@ services:
       # URL бэкенда для API запросов
       REACT_APP_API_BASE_URL: http://localhost:8000/api
       # Отключаем проверку TypeScript для dev режима
-      TSC_COMPILE_ON_ERROR: true
+      TSC_COMPILE_ON_ERROR: "true"
     volumes:
       # Разработка: монтируем код для hot reload
       - ./frontend:/app

@@ -1,13 +1,14 @@
 /**
  * Страница "База данных"
- * Показывает все записи из таблицы players_stats_raw с поиском по всем параметрам
+ * Показывает все записи из таблицы players_stats_raw с серверной пагинацией (100 записей на страницу)
+ * Реализован поиск по фамилии игрока, команде и позиции
+ * Корректно обрабатывает изменение количества записей в таблице
  */
 
 import React, { useMemo, useState } from 'react';
-import { MagnifyingGlassIcon, FunnelIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { useAllPlayersData } from '../hooks/useApi';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
-import { Button } from '../components/ui/Button';
 import { Table, TableHead, TableBody, TableRow, TableHeader, TableCell, EmptyTableState, LoadingTableRow, TablePagination } from '../components/ui/Table';
 import { Badge, TrackingStatusBadge } from '../components/ui/Badge';
 import { TrackingStatus, Player } from '../types';
@@ -21,95 +22,31 @@ interface TableColumn {
   render?: (player: Player, index: number) => React.ReactNode;
 }
 
-interface SearchFilters {
-  query: string;
-  tournament: string;
-  position: string;
-  minGoals: string;
-  maxGoals: string;
-  minAssists: string;
-  maxAssists: string;
-}
-
 export const Database: React.FC = () => {
-  const [searchFilters, setSearchFilters] = useState<SearchFilters>({
-    query: '',
-    tournament: '',
-    position: '',
-    minGoals: '',
-    maxGoals: '',
-    minAssists: '',
-    maxAssists: ''
-  });
-  
-  const [showFilters, setShowFilters] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 50;
+  const itemsPerPage = 100; // 100 человек на странице
 
-  const { data: playersResponse, isLoading, error } = useAllPlayersData();
+  // Серверная пагинация и поиск
+  const { data: playersResponse, isLoading, error } = useAllPlayersData(currentPage, itemsPerPage, searchQuery);
+  
   const players: Player[] = playersResponse?.data || [];
+  const totalItems = playersResponse?.total || 0;
+  const totalPages = playersResponse?.total_pages || Math.ceil(totalItems / itemsPerPage) || 0;
 
-  // Фильтрация данных
-  const filteredPlayers = useMemo(() => {
-    const query = searchFilters.query.toLowerCase().trim();
-
-    return players.filter((player) => {
-      const matchesQuery = !query || [
-        player.player_name,
-        player.team_name,
-        player.position,
-        player.notes,
-        player.citizenship,
-      ].some((field) => field?.toLowerCase().includes(query));
-      
-      const matchesTournament = !searchFilters.tournament || 
-        player.tournament_id?.toString() === searchFilters.tournament;
-      
-      const matchesPosition = !searchFilters.position || 
-        player.position?.toLowerCase().includes(searchFilters.position.toLowerCase());
-      
-      const parseNumber = (value: string) => {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : undefined;
-      };
-      
-      const minGoals = parseNumber(searchFilters.minGoals);
-      const maxGoals = parseNumber(searchFilters.maxGoals);
-      const minAssists = parseNumber(searchFilters.minAssists);
-      const maxAssists = parseNumber(searchFilters.maxAssists);
-      
-      const matchesMinGoals = minGoals === undefined || (player.goals || 0) >= minGoals;
-      const matchesMaxGoals = maxGoals === undefined || (player.goals || 0) <= maxGoals;
-      const matchesMinAssists = minAssists === undefined || (player.assists || 0) >= minAssists;
-      const matchesMaxAssists = maxAssists === undefined || (player.assists || 0) <= maxAssists;
-
-      return matchesQuery && matchesTournament && matchesPosition && 
-             matchesMinGoals && matchesMaxGoals && matchesMinAssists && matchesMaxAssists;
-    });
-  }, [players, searchFilters]);
-
-  // Пагинация
-  const totalPages = Math.ceil(filteredPlayers.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedPlayers = filteredPlayers.slice(startIndex, startIndex + itemsPerPage);
-
-  const handleFilterChange = (field: keyof SearchFilters, value: string) => {
-    setSearchFilters(prev => ({ ...prev, [field]: value }));
-    setCurrentPage(1); // Сбрасываем на первую страницу при изменении фильтров
-  };
-
-  const clearFilters = () => {
-    setSearchFilters({
-      query: '',
-      tournament: '',
-      position: '',
-      minGoals: '',
-      maxGoals: '',
-      minAssists: '',
-      maxAssists: ''
-    });
+  // При изменении поискового запроса сбрасываем на первую страницу
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
     setCurrentPage(1);
   };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setCurrentPage(1);
+  };
+
+  // Индекс для нумерации строк
+  const startIndex = (currentPage - 1) * itemsPerPage;
 
   const TOURNAMENT_NAMES: Record<number, string> = useMemo(() => ({
     0: 'МФЛ',
@@ -257,6 +194,13 @@ export const Database: React.FC = () => {
     ...dataColumns,
   ], [dataColumns, startIndex]);
 
+  // Сбрасываем на первую страницу, если текущая страница больше общего количества
+  React.useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(1);
+    }
+  }, [totalPages, currentPage]);
+
   if (error) {
     return (
       <div className="text-center py-12">
@@ -272,130 +216,48 @@ export const Database: React.FC = () => {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex flex-col gap-4">
             <div>
               <CardTitle>База данных футболистов</CardTitle>
               <p className="mt-2 text-sm text-gray-500">
-                Всего игроков: {players.length}. Все данные импортированы из Excel-файлов и отражают столбцы таблицы players_stats_raw.
+                Всего игроков в базе: {totalItems}. По {itemsPerPage} игроков на странице.
               </p>
-            </div>
-            <div className="flex items-center space-x-2 self-start md:self-auto">
-              <Button
-                variant={showFilters ? "primary" : "secondary"}
-                size="sm"
-                onClick={() => setShowFilters(!showFilters)}
-              >
-                <FunnelIcon className="w-4 h-4 mr-2" />
-                Фильтры
-              </Button>
-              {Object.values(searchFilters).some(v => v) && (
-                <Button variant="secondary" size="sm" onClick={clearFilters}>
-                  Очистить
-                </Button>
-              )}
             </div>
           </div>
         </CardHeader>
         
         <CardContent>
-          {/* Основной поиск */}
-          <div className="mb-4">
+          {/* Поиск по фамилии */}
+          <div className="mb-6">
             <div className="relative">
               <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
                 type="text"
-                placeholder="Поиск по имени игрока, команде или позиции..."
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                value={searchFilters.query}
-                onChange={(e) => handleFilterChange('query', e.target.value)}
+                placeholder="Поиск по фамилии игрока, команде или позиции..."
+                className="w-full pl-10 pr-20 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                value={searchQuery}
+                onChange={(e) => handleSearchChange(e.target.value)}
               />
+              {searchQuery && (
+                <button
+                  onClick={clearSearch}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Расширенные фильтры */}
-          {showFilters && (
-            <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Турнир
-                  </label>
-                  <select
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    value={searchFilters.tournament}
-                    onChange={(e) => handleFilterChange('tournament', e.target.value)}
-                  >
-                    <option value="">Все турниры</option>
-                    {Object.entries(TOURNAMENT_NAMES).map(([id, name]) => (
-                      <option key={id} value={id}>{name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Позиция
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Например: GK, DF, MF, FW"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    value={searchFilters.position}
-                    onChange={(e) => handleFilterChange('position', e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Голы (от - до)
-                  </label>
-                  <div className="flex space-x-2">
-                    <input
-                      type="number"
-                      placeholder="От"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      value={searchFilters.minGoals}
-                      onChange={(e) => handleFilterChange('minGoals', e.target.value)}
-                    />
-                    <input
-                      type="number"
-                      placeholder="До"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      value={searchFilters.maxGoals}
-                      onChange={(e) => handleFilterChange('maxGoals', e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Ассисты (от - до)
-                  </label>
-                  <div className="flex space-x-2">
-                    <input
-                      type="number"
-                      placeholder="От"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      value={searchFilters.minAssists}
-                      onChange={(e) => handleFilterChange('minAssists', e.target.value)}
-                    />
-                    <input
-                      type="number"
-                      placeholder="До"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      value={searchFilters.maxAssists}
-                      onChange={(e) => handleFilterChange('maxAssists', e.target.value)}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Статистика */}
           <div className="mb-4 text-sm text-gray-600">
-            Показано {paginatedPlayers.length} из {filteredPlayers.length} записей 
-            {filteredPlayers.length !== players.length && ` (всего в базе: ${players.length})`}
+            {searchQuery ? (
+              <>Найдено {totalItems} записей. Страница {currentPage} из {totalPages}.</>
+            ) : (
+              <>Показано записи с {startIndex + 1} по {Math.min(startIndex + itemsPerPage, totalItems)} из {totalItems}. Страница {currentPage} из {totalPages}.</>
+            )}
           </div>
 
           {/* Таблица */}
@@ -412,22 +274,22 @@ export const Database: React.FC = () => {
             <TableBody>
               {isLoading ? (
                 <LoadingTableRow columns={columns.length} />
-              ) : paginatedPlayers.length === 0 ? (
+              ) : players.length === 0 ? (
                 <EmptyTableState 
                   title={
-                    Object.values(searchFilters).some(v => v)
+                    searchQuery
                       ? "По вашему запросу ничего не найдено"
                       : "Нет данных для отображения"
                   }
                   description={
-                    Object.values(searchFilters).some(v => v)
-                      ? "Попробуйте изменить параметры поиска"
-                      : "Загрузите данные или обновите фильтры"
+                    searchQuery
+                      ? "Попробуйте изменить поисковый запрос"
+                      : "Загрузите данные из Excel-файлов"
                   }
                   colSpan={columns.length}
                 />
               ) : (
-                paginatedPlayers.map((player: Player, index: number) => (
+                players.map((player: Player, index: number) => (
                   <TableRow key={`${player.id || player.player_name}-${index}`}>
                     {columns.map((column) => {
                       const value = column.key === 'index'
@@ -460,7 +322,7 @@ export const Database: React.FC = () => {
             <TablePagination
               currentPage={currentPage}
               totalPages={totalPages}
-              totalItems={filteredPlayers.length}
+              totalItems={totalItems}
               itemsPerPage={itemsPerPage}
               onPageChange={setCurrentPage}
             />

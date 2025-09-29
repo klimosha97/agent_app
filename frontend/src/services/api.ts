@@ -315,8 +315,12 @@ class ApiService {
   /**
    * Получить все данные из базы players_stats_raw
    */
-  async getAllPlayersDatabase(): Promise<PlayerListResponse> {
-    const response = await this.api.get('/players/raw-data');
+  getAllPlayersDatabase = async (page: number = 1, per_page: number = 100, search?: string): Promise<PlayerListResponse> => {
+    const params: any = { page, per_page };
+    if (search && search.trim()) {
+      params.search = search.trim();
+    }
+    const response = await this.api.get('/players/raw-data', { params });
     return response.data;
   }
 

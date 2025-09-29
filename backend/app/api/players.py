@@ -210,6 +210,53 @@ async def get_all_players_database(
         raise HTTPException(status_code=500, detail=f"Failed to retrieve database players: {str(e)}")
 
 
+@router.get("/players/tracked", response_model=PlayerListResponse, summary="Получить отслеживаемых игроков")
+async def get_tracked_players(
+    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    per_page: int = Query(50, ge=1, le=500, description="Количество на странице"),
+    db: Session = Depends(get_db)
+):
+    """
+    Получение списка всех отслеживаемых игроков (статус != 'non interesting').
+    """
+    try:
+        # Запрос отслеживаемых игроков
+        query = db.query(PlayerStatsRaw).filter(
+            PlayerStatsRaw.tracking_status != 'non interesting'
+        )
+        
+        if tournament_id is not None:
+            query = query.filter(PlayerStatsRaw.tournament_id == tournament_id)
+        
+        # Сортируем по статусу и имени
+        query = query.order_by(
+            PlayerStatsRaw.tracking_status.desc(),
+            PlayerStatsRaw.player_name.asc()
+        )
+        
+        # Подсчёт и пагинация
+        total_count = query.count()
+        offset = (page - 1) * per_page
+        players = query.offset(offset).limit(per_page).all()
+        
+        players_data = [PlayerResponse.from_orm(player) for player in players]
+        
+        logger.info(f"Retrieved {len(players)} tracked players (total: {total_count})")
+        
+        return PlayerListResponse(
+            data=players_data,
+            total=total_count,
+            page=page,
+            per_page=per_page,
+            message=f"Found {total_count} tracked players"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error retrieving tracked players: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve tracked players: {str(e)}")
+
+
 @router.get("/players/{player_id}", response_model=PlayerDetailResponse, summary="Получить игрока по ID")
 async def get_player(
     player_id: UUID,
@@ -283,53 +330,6 @@ async def update_player_status(
         logger.error(f"Error updating player {player_id} status: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update player status: {str(e)}")
-
-
-@router.get("/players/tracked", response_model=PlayerListResponse, summary="Получить отслеживаемых игроков")
-async def get_tracked_players(
-    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
-    page: int = Query(1, ge=1, description="Номер страницы"),
-    per_page: int = Query(50, ge=1, le=500, description="Количество на странице"),
-    db: Session = Depends(get_db)
-):
-    """
-    Получение списка всех отслеживаемых игроков (статус != 'non interesting').
-    """
-    try:
-        # Запрос отслеживаемых игроков
-        query = db.query(PlayerStatsRaw).filter(
-            PlayerStatsRaw.tracking_status != 'non interesting'
-        )
-        
-        if tournament_id is not None:
-            query = query.filter(PlayerStatsRaw.tournament_id == tournament_id)
-        
-        # Сортируем по статусу и имени
-        query = query.order_by(
-            PlayerStatsRaw.tracking_status.desc(),
-            PlayerStatsRaw.player_name.asc()
-        )
-        
-        # Подсчёт и пагинация
-        total_count = query.count()
-        offset = (page - 1) * per_page
-        players = query.offset(offset).limit(per_page).all()
-        
-        players_data = [PlayerResponse.from_orm(player) for player in players]
-        
-        logger.info(f"Retrieved {len(players)} tracked players (total: {total_count})")
-        
-        return PlayerListResponse(
-            data=players_data,
-            total=total_count,
-            page=page,
-            per_page=per_page,
-            message=f"Found {total_count} tracked players"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error retrieving tracked players: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve tracked players: {str(e)}")
 
 
 @router.get("/players/search", response_model=PlayerSearchResponse, summary="Поиск игроков")

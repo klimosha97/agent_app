@@ -100,6 +100,7 @@ export interface PlayerListResponse extends BaseResponse {
   total: number;
   page: number;
   per_page: number;
+  total_pages: number;
 }
 
 export interface PlayerDetailResponse extends BaseResponse {
@@ -252,7 +253,7 @@ export const TOURNAMENTS = {
 } as const;
 
 export const TRACKING_STATUSES = {
-  'non interesting': 'Обычный игрок',
+  'non interesting': 'non interesting',
   'interesting': 'Интересный игрок',
   'to watch': 'Игрок для наблюдения',
   'my player': 'Мой игрок',

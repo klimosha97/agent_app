@@ -7,11 +7,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { apiService } from '../services/api';
 import {
-  Player,
-  PlayerListResponse,
-  Tournament,
-  TournamentStats,
-  TopPerformersResponse,
   TrackingStatus,
   PlayerFilters,
   SortOptions,
@@ -19,12 +14,6 @@ import {
 } from '../types';
 
 // === Типы для хуков ===
-
-interface UseApiState<T> {
-  data: T | null;
-  loading: boolean;
-  error: string | null;
-}
 
 interface UseApiOptions {
   enabled?: boolean;
@@ -96,7 +85,7 @@ export function useTournamentPlayers(
     ['tournamentPlayers', tournamentId, sort, pagination],
     () => apiService.getTournamentPlayers(tournamentId, sort, pagination),
     {
-      enabled: tournamentId !== undefined,
+      enabled: tournamentId !== undefined && tournamentId >= 0 && tournamentId <= 3,
       staleTime: 5 * 60 * 1000, // 5 минут
     }
   );
@@ -105,7 +94,7 @@ export function useTournamentPlayers(
 // === Хук для работы с турнирами ===
 
 export function useTournaments() {
-  return useQuery('tournaments', apiService.getTournaments, {
+  return useQuery('tournaments', () => apiService.getTournaments(), {
     staleTime: 10 * 60 * 1000, // 10 минут
     refetchOnWindowFocus: false,
   });
@@ -116,7 +105,7 @@ export function useTournament(tournamentId: number) {
     ['tournament', tournamentId],
     () => apiService.getTournament(tournamentId),
     {
-      enabled: tournamentId !== undefined,
+      enabled: tournamentId !== undefined && tournamentId >= 0 && tournamentId <= 3,
       staleTime: 10 * 60 * 1000, // 10 минут
     }
   );
@@ -127,7 +116,7 @@ export function useTournamentStats(tournamentId: number) {
     ['tournamentStats', tournamentId],
     () => apiService.getTournamentStats(tournamentId),
     {
-      enabled: tournamentId !== undefined,
+      enabled: tournamentId !== undefined && tournamentId >= 0 && tournamentId <= 3,
       staleTime: 5 * 60 * 1000, // 5 минут
     }
   );
@@ -328,18 +317,23 @@ export function usePlayerSearchWithState() {
 
 // === Хук для получения всех данных из базы ===
 
-export function useAllPlayersData() {
-  return useQuery('allPlayersData', () => apiService.getAllPlayersDatabase(), {
-    retry: 1,
-    staleTime: 5 * 60 * 1000, // 5 минут
-    refetchOnWindowFocus: false,
-  });
+export function useAllPlayersData(page: number = 1, per_page: number = 100, search?: string) {
+  return useQuery(
+    ['allPlayersData', page, per_page, search],
+    () => apiService.getAllPlayersDatabase(page, per_page, search),
+    {
+      retry: 1,
+      staleTime: 5 * 60 * 1000, // 5 минут
+      refetchOnWindowFocus: false,
+      keepPreviousData: true, // Сохраняем предыдущие данные при смене страницы для плавного UX
+    }
+  );
 }
 
 // === Хук для проверки состояния приложения ===
 
 export function useAppHealth() {
-  return useQuery('appHealth', apiService.checkHealth, {
+  return useQuery('appHealth', () => apiService.checkHealth(), {
     refetchInterval: 30000, // Каждые 30 секунд
     retry: 3,
     staleTime: 15000, // 15 секунд

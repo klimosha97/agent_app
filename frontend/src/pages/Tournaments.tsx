@@ -33,7 +33,7 @@ export const Tournaments: React.FC = () => {
     data: playersResponse, 
     isLoading: isLoadingPlayers 
   } = useTournamentPlayers(
-    selectedTournament?.id ?? -1,
+    selectedTournament?.id as number, // Only fetch when tournament is selected
     sort,
     pagination
   );
