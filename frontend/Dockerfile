@@ -18,8 +18,7 @@ RUN addgroup -g 1001 -S appgroup && \
 COPY package*.json ./
 
 # Устанавливаем зависимости
-# Устанавливаем зависимости
-RUN npm ci && \
+RUN npm install && \
     npm cache clean --force
 
 # Копируем исходный код приложения
@@ -35,12 +34,11 @@ USER appuser
 EXPOSE 3000
 
 # Переменные окружения
-ENV REACT_APP_API_BASE_URL=http://localhost:8000/api
 ENV NODE_ENV=development
 ENV GENERATE_SOURCEMAP=true
 
-# Команда для запуска в development режиме
-CMD ["npm", "start"]
+# Команда для запуска в development режиме с Vite
+CMD ["npx", "vite", "--host", "0.0.0.0", "--port", "3000"]
 
 # Для production сборки раскомментируйте:
 # RUN npm run build

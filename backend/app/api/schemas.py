@@ -64,10 +64,81 @@ class PlayerStats(BaseModel):
     passes_total: Optional[int] = Field(0, ge=0, description="Передачи всего")
     passes_accuracy: Optional[float] = Field(None, ge=0, le=100, description="Точность передач, %")
     tackles: Optional[int] = Field(0, ge=0, description="Отборы")
+    tackles_success_rate: Optional[float] = Field(None, ge=0, le=100, description="Отборы удачные, %")
     interceptions: Optional[int] = Field(0, ge=0, description="Перехваты")
     yellow_cards: Optional[int] = Field(0, ge=0, description="Жёлтые карточки")
     red_cards: Optional[int] = Field(0, ge=0, description="Красные карточки")
     xg: Optional[float] = Field(None, ge=0, description="xG (ожидаемые голы)")
+    
+    # Дополнительные голевые показатели
+    goal_attempts: Optional[int] = Field(0, ge=0, description="Голевые моменты")
+    goal_attempts_successful: Optional[int] = Field(0, ge=0, description="Голевые моменты удачные")
+    goal_attempts_success_rate: Optional[float] = Field(None, ge=0, le=100, description="Голевые моменты удачные, %")
+    goal_moments_created: Optional[int] = Field(0, ge=0, description="Голевые моменты создал")
+    goal_attacks_participation: Optional[int] = Field(0, ge=0, description="Участие в голевых атаках")
+    goal_errors: Optional[int] = Field(0, ge=0, description="Голевые ошибки")
+    rough_errors: Optional[int] = Field(0, ge=0, description="Грубые ошибки")
+    fouls_committed: Optional[int] = Field(0, ge=0, description="Фолы совершённые")
+    fouls_suffered: Optional[int] = Field(0, ge=0, description="Фолы на игроке")
+    
+    # Передачи
+    passes_key: Optional[int] = Field(0, ge=0, description="Передачи ключевые")
+    passes_key_accuracy: Optional[float] = Field(None, ge=0, le=100, description="Передачи ключевые точные, %")
+    crosses: Optional[int] = Field(0, ge=0, description="Навесы")
+    crosses_accuracy: Optional[float] = Field(None, ge=0, le=100, description="Навесы точные, %")
+    passes_progressive: Optional[int] = Field(0, ge=0, description="Передачи прогрессивные")
+    passes_progressive_accuracy: Optional[float] = Field(None, ge=0, le=100, description="Передачи прогрессивные точные, %")
+    passes_progressive_clean: Optional[int] = Field(0, ge=0, description="Передачи прогрессивные чистые")
+    passes_long: Optional[int] = Field(0, ge=0, description="Передачи длинные")
+    passes_long_accuracy: Optional[float] = Field(None, ge=0, le=100, description="Передачи длинные точные, %")
+    passes_super_long: Optional[int] = Field(0, ge=0, description="Передачи сверхдлинные")
+    passes_super_long_accuracy: Optional[float] = Field(None, ge=0, le=100, description="Передачи сверхдлинные точные, %")
+    passes_final_third: Optional[int] = Field(0, ge=0, description="Передачи в финальную треть")
+    passes_final_third_accuracy: Optional[float] = Field(None, ge=0, le=100, description="Передачи в финальную треть точные, %")
+    passes_penalty_area: Optional[int] = Field(0, ge=0, description="Передачи в штрафную")
+    passes_penalty_area_accuracy: Optional[float] = Field(None, ge=0, le=100, description="Передачи в штрафную точные, %")
+    passes_for_shot: Optional[int] = Field(0, ge=0, description="Передачи под удар")
+    
+    # Единоборства
+    duels_total: Optional[int] = Field(0, ge=0, description="Единоборства всего")
+    duels_success_rate: Optional[float] = Field(None, ge=0, le=100, description="Единоборства удачные, %")
+    duels_defensive: Optional[int] = Field(0, ge=0, description="Единоборства в обороне")
+    duels_defensive_success_rate: Optional[float] = Field(None, ge=0, le=100, description="Единоборства в обороне удачные, %")
+    duels_offensive: Optional[int] = Field(0, ge=0, description="Единоборства в атаке")
+    duels_offensive_success_rate: Optional[float] = Field(None, ge=0, le=100, description="Единоборства в атаке удачные, %")
+    duels_aerial: Optional[int] = Field(0, ge=0, description="Единоборства вверху")
+    duels_aerial_success_rate: Optional[float] = Field(None, ge=0, le=100, description="Единоборства вверху удачные, %")
+    
+    # Обводки
+    dribbles: Optional[int] = Field(0, ge=0, description="Обводки")
+    dribbles_success_rate: Optional[float] = Field(None, ge=0, le=100, description="Обводки удачные, %")
+    dribbles_final_third: Optional[int] = Field(0, ge=0, description="Обводки в финальной трети")
+    dribbles_final_third_success_rate: Optional[float] = Field(None, ge=0, le=100, description="Обводки в финальной трети удачные, %")
+    
+    # Оборона
+    recoveries: Optional[int] = Field(0, ge=0, description="Подборы")
+    
+    @field_validator(
+        'passes_accuracy', 'xg', 'tackles_success_rate', 
+        'goal_attempts_success_rate', 'passes_key_accuracy', 'crosses_accuracy',
+        'passes_progressive_accuracy', 'passes_long_accuracy', 'passes_super_long_accuracy',
+        'passes_final_third_accuracy', 'passes_penalty_area_accuracy',
+        'duels_success_rate', 'duels_defensive_success_rate', 'duels_offensive_success_rate',
+        'duels_aerial_success_rate', 'dribbles_success_rate', 'dribbles_final_third_success_rate',
+        mode='before'
+    )
+    @classmethod
+    def validate_float_values(cls, v):
+        """Заменяет NaN и Infinity на None для корректной JSON сериализации"""
+        if v is None:
+            return None
+        try:
+            import math
+            if math.isnan(v) or math.isinf(v):
+                return None
+            return v
+        except (TypeError, ValueError):
+            return None
 
 
 class PlayerCreate(PlayerBase, PlayerStats):
@@ -94,6 +165,8 @@ class PlayerResponse(PlayerBase, PlayerStats):
     height: Optional[str] = None
     weight: Optional[str] = None
     citizenship: Optional[str] = None
+    player_index: Optional[str] = None
+    notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     

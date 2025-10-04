@@ -5,7 +5,6 @@
 
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import {
-  Player,
   PlayerListResponse,
   PlayerDetailResponse,
   PlayerSearchResponse,
@@ -27,7 +26,8 @@ class ApiService {
 
   constructor() {
     // Определяем базовый URL API
-    this.baseURL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
+    // Используем относительный путь /api, который будет проксироваться на бэкенд
+    this.baseURL = process.env.REACT_APP_API_BASE_URL || '/api';
     
     // Создаём экземпляр axios
     this.api = axios.create({

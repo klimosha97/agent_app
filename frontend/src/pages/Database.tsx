@@ -77,7 +77,7 @@ export const Database: React.FC = () => {
     if (!Number.isNaN(numericValue) && Number.isFinite(numericValue)) {
       if (format === 'percent') {
         const asPercent = numericValue <= 1 ? numericValue * 100 : numericValue;
-        return `${asPercent.toFixed(1)}%`;
+        return `${asPercent.toFixed(2)}%`;
       }
       return Number.isInteger(numericValue) ? numericValue : Number(numericValue.toFixed(2));
     }

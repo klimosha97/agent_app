@@ -185,16 +185,76 @@ async def get_all_players_database(
                 player_name=player.player_name or "Неизвестно",
                 team_name=player.team_name or "Неизвестно",
                 position=player.position or "N/A",
+                age=player.age,
+                player_number=player.player_number,
+                height=player.height,
+                weight=player.weight,
+                citizenship=player.citizenship,
+                player_index=player.player_index,
+                minutes_played=player.minutes_played or 0,
+                # Основная статистика
                 goals=player.goals or 0,
                 assists=player.assists or 0,
                 shots=player.shots or 0,
+                shots_on_target=player.shots_on_target or 0,
+                xg=player.xg,
+                # Голевые показатели
+                goal_attempts=player.goal_attempts or 0,
+                goal_attempts_successful=player.goal_attempts_successful or 0,
+                goal_attempts_success_rate=player.goal_attempts_success_rate,
+                goal_moments_created=player.goal_moments_created or 0,
+                goal_attacks_participation=player.goal_attacks_participation or 0,
+                goal_errors=player.goal_errors or 0,
+                rough_errors=player.rough_errors or 0,
+                fouls_committed=player.fouls_committed or 0,
+                fouls_suffered=player.fouls_suffered or 0,
+                # Передачи
                 passes_total=player.passes_total or 0,
-                minutes_played=player.minutes_played or 0,
+                passes_accuracy=player.passes_accuracy,
+                passes_key=player.passes_key or 0,
+                passes_key_accuracy=player.passes_key_accuracy,
+                crosses=player.crosses or 0,
+                crosses_accuracy=player.crosses_accuracy,
+                passes_progressive=player.passes_progressive or 0,
+                passes_progressive_accuracy=player.passes_progressive_accuracy,
+                passes_progressive_clean=player.passes_progressive_clean or 0,
+                passes_long=player.passes_long or 0,
+                passes_long_accuracy=player.passes_long_accuracy,
+                passes_super_long=player.passes_super_long or 0,
+                passes_super_long_accuracy=player.passes_super_long_accuracy,
+                passes_final_third=player.passes_final_third or 0,
+                passes_final_third_accuracy=player.passes_final_third_accuracy,
+                passes_penalty_area=player.passes_penalty_area or 0,
+                passes_penalty_area_accuracy=player.passes_penalty_area_accuracy,
+                passes_for_shot=player.passes_for_shot or 0,
+                # Единоборства
+                duels_total=player.duels_total or 0,
+                duels_success_rate=player.duels_success_rate,
+                duels_defensive=player.duels_defensive or 0,
+                duels_defensive_success_rate=player.duels_defensive_success_rate,
+                duels_offensive=player.duels_offensive or 0,
+                duels_offensive_success_rate=player.duels_offensive_success_rate,
+                duels_aerial=player.duels_aerial or 0,
+                duels_aerial_success_rate=player.duels_aerial_success_rate,
+                # Обводки
+                dribbles=player.dribbles or 0,
+                dribbles_success_rate=player.dribbles_success_rate,
+                dribbles_final_third=player.dribbles_final_third or 0,
+                dribbles_final_third_success_rate=player.dribbles_final_third_success_rate,
+                # Оборона
+                tackles=player.tackles or 0,
+                tackles_success_rate=player.tackles_success_rate,
+                interceptions=player.interceptions or 0,
+                recoveries=player.recoveries or 0,
+                # Дисциплина
+                yellow_cards=player.yellow_cards or 0,
+                red_cards=player.red_cards or 0,
+                # Метаданные
                 tracking_status=player.tracking_status,
                 tournament_id=player.tournament_id,
+                notes=player.notes,
                 created_at=player.created_at,
-                updated_at=player.updated_at,
-                notes=None  # В raw таблице нет заметок
+                updated_at=player.updated_at
             ))
         
         return PlayerListResponse(
@@ -255,6 +315,69 @@ async def get_tracked_players(
     except Exception as e:
         logger.error(f"Error retrieving tracked players: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve tracked players: {str(e)}")
+
+
+@router.get("/players/search", response_model=PlayerSearchResponse, summary="Поиск игроков")
+async def search_players(
+    query: str = Query(..., min_length=2, description="Поисковый запрос"),
+    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
+    limit: int = Query(20, ge=1, le=100, description="Максимум результатов"),
+    db: Session = Depends(get_db)
+):
+    """
+    Поиск игроков по имени с возможностью фильтрации по турниру.
+    Возвращает краткую информацию для выбора игрока.
+    """
+    try:
+        # Поиск по имени (нечёткий поиск)
+        search_query = db.query(PlayerStatsRaw).filter(
+            PlayerStatsRaw.player_name.ilike(f"%{query}%")
+        )
+        
+        if tournament_id is not None:
+            search_query = search_query.filter(PlayerStatsRaw.tournament_id == tournament_id)
+        
+        # Сортировка по релевантности (точные совпадения в начале)
+        search_query = search_query.order_by(
+            func.length(PlayerStatsRaw.player_name).asc(),
+            PlayerStatsRaw.player_name.asc()
+        ).limit(limit)
+        
+        players = search_query.all()
+        
+        # Формируем результаты поиска
+        results = []
+        for player in players:
+            basic_stats = {
+                "goals": player.goals or 0,
+                "assists": player.assists or 0,
+                "minutes_played": player.minutes_played or 0,
+                "position": player.position or "Unknown"
+            }
+            
+            result = PlayerSearchResult(
+                id=player.id,
+                player_name=player.player_name,
+                team_name=player.team_name,
+                position=player.position,
+                tournament_id=player.tournament_id,
+                current_status=TrackingStatus(player.tracking_status),
+                basic_stats=basic_stats
+            )
+            results.append(result)
+        
+        logger.info(f"Search '{query}' found {len(results)} players")
+        
+        return PlayerSearchResponse(
+            query=query,
+            results=results,
+            total_found=len(results),
+            message=f"Found {len(results)} players matching '{query}'"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error searching players: {e}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @router.get("/players/{player_id}", response_model=PlayerDetailResponse, summary="Получить игрока по ID")
@@ -330,69 +453,6 @@ async def update_player_status(
         logger.error(f"Error updating player {player_id} status: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update player status: {str(e)}")
-
-
-@router.get("/players/search", response_model=PlayerSearchResponse, summary="Поиск игроков")
-async def search_players(
-    query: str = Query(..., min_length=2, description="Поисковый запрос"),
-    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
-    limit: int = Query(20, ge=1, le=100, description="Максимум результатов"),
-    db: Session = Depends(get_db)
-):
-    """
-    Поиск игроков по имени с возможностью фильтрации по турниру.
-    Возвращает краткую информацию для выбора игрока.
-    """
-    try:
-        # Поиск по имени (нечёткий поиск)
-        search_query = db.query(PlayerStatsRaw).filter(
-            PlayerStatsRaw.player_name.ilike(f"%{query}%")
-        )
-        
-        if tournament_id is not None:
-            search_query = search_query.filter(PlayerStatsRaw.tournament_id == tournament_id)
-        
-        # Сортировка по релевантности (точные совпадения в начале)
-        search_query = search_query.order_by(
-            func.length(PlayerStatsRaw.player_name).asc(),
-            PlayerStatsRaw.player_name.asc()
-        ).limit(limit)
-        
-        players = search_query.all()
-        
-        # Формируем результаты поиска
-        results = []
-        for player in players:
-            basic_stats = {
-                "goals": player.goals or 0,
-                "assists": player.assists or 0,
-                "minutes_played": player.minutes_played or 0,
-                "position": player.position or "Unknown"
-            }
-            
-            result = PlayerSearchResult(
-                id=player.id,
-                player_name=player.player_name,
-                team_name=player.team_name,
-                position=player.position,
-                tournament_id=player.tournament_id,
-                current_status=TrackingStatus(player.tracking_status),
-                basic_stats=basic_stats
-            )
-            results.append(result)
-        
-        logger.info(f"Search '{query}' found {len(results)} players")
-        
-        return PlayerSearchResponse(
-            query=query,
-            results=results,
-            total_found=len(results),
-            message=f"Found {len(results)} players matching '{query}'"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error searching players: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
 @router.get("/tournaments/{tournament_id}/players", response_model=PlayerListResponse, summary="Игроки турнира")
