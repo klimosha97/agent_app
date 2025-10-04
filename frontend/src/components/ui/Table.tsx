@@ -2,6 +2,7 @@
  * Компонент таблицы с сортировкой и пагинацией
  */
 
+
 import React from 'react';
 import { ChevronUpIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import { classNames } from '../../utils';
@@ -14,9 +15,9 @@ interface TableProps {
 }
 
 export const Table: React.FC<TableProps> = ({ children, className }) => (
-  <div className="shadow ring-1 ring-black ring-opacity-5 rounded-lg">
-    <div className="max-h-[70vh] overflow-y-auto overflow-x-auto">
-      <table className={classNames('min-w-full divide-y divide-gray-300', className)}>
+  <div className="shadow ring-1 ring-black ring-opacity-5 rounded-lg overflow-hidden">
+    <div className="max-h-[70vh] overflow-y-auto overflow-x-auto relative">
+      <table className={classNames('min-w-full divide-y divide-gray-300', className)} style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
         {children}
       </table>
     </div>
@@ -79,6 +80,9 @@ interface TableHeaderProps {
   sorted?: 'asc' | 'desc' | null;
   onSort?: () => void;
   align?: 'left' | 'center' | 'right';
+  sticky?: boolean;
+  stickyLeft?: string;
+  stickyZIndex?: number;
 }
 
 export const TableHeader: React.FC<TableHeaderProps> = ({
@@ -88,6 +92,9 @@ export const TableHeader: React.FC<TableHeaderProps> = ({
   sorted = null,
   onSort,
   align = 'left',
+  sticky = false,
+  stickyLeft = '0',
+  stickyZIndex = 10,
 }) => {
   const content = (
     <div className="flex items-center space-x-1">
@@ -111,6 +118,16 @@ export const TableHeader: React.FC<TableHeaderProps> = ({
     </div>
   );
 
+  const stickyStyle = sticky ? {
+    position: 'sticky' as const,
+    left: stickyLeft,
+    zIndex: stickyZIndex,
+    boxShadow: '2px 0 5px 0 rgba(0, 0, 0, 0.15)',
+    background: '#f9fafb',
+    backgroundClip: 'padding-box' as const,
+    borderRight: '2px solid #e5e7eb'
+  } : undefined;
+
   return (
     <th
       scope="col"
@@ -122,6 +139,7 @@ export const TableHeader: React.FC<TableHeaderProps> = ({
         sortable && 'cursor-pointer hover:bg-gray-100',
         className
       )}
+      style={stickyStyle}
       onClick={sortable ? onSort : undefined}
     >
       {content}
@@ -134,6 +152,9 @@ interface TableCellProps {
   className?: string;
   align?: 'left' | 'center' | 'right';
   colSpan?: number;
+  sticky?: boolean;
+  stickyLeft?: string;
+  stickyZIndex?: number;
 }
 
 export const TableCell: React.FC<TableCellProps> = ({
@@ -141,6 +162,9 @@ export const TableCell: React.FC<TableCellProps> = ({
   className,
   align = 'left',
   colSpan,
+  sticky = false,
+  stickyLeft = '0',
+  stickyZIndex = 10,
 }) => {
   const alignClasses = {
     left: 'text-left',
@@ -148,13 +172,25 @@ export const TableCell: React.FC<TableCellProps> = ({
     right: 'text-right',
   };
 
+  const stickyStyle = sticky ? {
+    position: 'sticky' as const,
+    left: stickyLeft,
+    zIndex: stickyZIndex,
+    boxShadow: '2px 0 5px 0 rgba(0, 0, 0, 0.15)',
+    background: '#ffffff',
+    backgroundClip: 'padding-box' as const,
+    borderRight: '2px solid #e5e7eb',
+    borderBottom: '1px solid #e5e7eb'
+  } : undefined;
+
   return (
     <td
       className={classNames(
-        'px-6 py-4 whitespace-nowrap text-sm text-gray-900',
+        'px-6 py-4 whitespace-nowrap text-sm text-gray-900 border-b border-gray-200',
         alignClasses[align],
         className
       )}
+      style={stickyStyle}
       colSpan={colSpan}
     >
       {children}

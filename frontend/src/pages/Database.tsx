@@ -5,6 +5,7 @@
  * Корректно обрабатывает изменение количества записей в таблице
  */
 
+
 import React, { useMemo, useState } from 'react';
 import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { useAllPlayersData } from '../hooks/useApi';
@@ -20,6 +21,9 @@ interface TableColumn {
   format?: 'percent' | 'datetime';
   cellClassName?: string;
   sortable?: boolean;
+  sticky?: boolean;
+  stickyLeft?: string;
+  stickyZIndex?: number;
   render?: (player: Player, index: number) => React.ReactNode;
 }
 
@@ -133,7 +137,7 @@ export const Database: React.FC = () => {
   };
 
   const dataColumns: TableColumn[] = useMemo(() => ([
-    { key: 'player_name', label: 'Игрок', sortable: true, cellClassName: 'min-w-[160px] text-sm font-medium text-gray-900' },
+    { key: 'player_name', label: 'Игрок', sortable: true, sticky: true, stickyLeft: '0px', stickyZIndex: 21, cellClassName: 'min-w-[200px] text-sm font-medium text-gray-900' },
     { key: 'team_name', label: 'Команда', sortable: true, cellClassName: 'min-w-[160px] text-sm text-gray-700' },
     {
       key: 'tracking_status',
@@ -324,6 +328,9 @@ export const Database: React.FC = () => {
                     sortable={column.sortable}
                     sorted={sortField === String(column.key) ? sortOrder : null}
                     onSort={column.sortable ? () => handleSort(String(column.key)) : undefined}
+                    sticky={column.sticky}
+                    stickyLeft={column.stickyLeft}
+                    stickyZIndex={column.stickyZIndex}
                   >
                     {column.label}
                   </TableHeader>
@@ -366,6 +373,9 @@ export const Database: React.FC = () => {
                           key={`${player.id || player.player_name}-${String(column.key)}`}
                           align={column.align}
                           className={column.cellClassName}
+                          sticky={column.sticky}
+                          stickyLeft={column.stickyLeft}
+                          stickyZIndex={column.stickyZIndex}
                         >
                           {value}
                         </TableCell>
