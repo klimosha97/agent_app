@@ -51,7 +51,7 @@ class PlayerBase(BaseModel):
     player_name: str = Field(..., description="Имя игрока")
     team_name: str = Field(..., description="Команда")
     position: Optional[str] = Field(None, description="Позиция")
-    age: Optional[int] = Field(None, ge=14, le=50, description="Возраст")
+    age: Optional[int] = Field(None, ge=0, le=50, description="Возраст (0 = не указан)")
     minutes_played: Optional[int] = Field(None, ge=0, description="Минуты на поле")
 
 

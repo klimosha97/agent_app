@@ -317,10 +317,16 @@ export function usePlayerSearchWithState() {
 
 // === Хук для получения всех данных из базы ===
 
-export function useAllPlayersData(page: number = 1, per_page: number = 100, search?: string) {
+export function useAllPlayersData(
+  page: number = 1, 
+  per_page: number = 100, 
+  search?: string,
+  sort_field?: string,
+  sort_order?: 'asc' | 'desc'
+) {
   return useQuery(
-    ['allPlayersData', page, per_page, search],
-    () => apiService.getAllPlayersDatabase(page, per_page, search),
+    ['allPlayersData', page, per_page, search, sort_field, sort_order],
+    () => apiService.getAllPlayersDatabase(page, per_page, search, sort_field, sort_order),
     {
       retry: 1,
       staleTime: 5 * 60 * 1000, // 5 минут

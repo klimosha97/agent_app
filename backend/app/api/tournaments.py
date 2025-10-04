@@ -435,3 +435,92 @@ async def get_top_performers(
         raise HTTPException(status_code=500, detail=f"Failed to retrieve top performers: {str(e)}")
 
 
+@router.delete("/tournaments/{tournament_id}/players", summary="Удалить всех игроков турнира")
+async def delete_tournament_players(
+    tournament_id: int = Path(..., ge=0, le=3, description="ID турнира"),
+    confirm: bool = Query(False, description="Подтверждение удаления (должно быть true)"),
+    db: Session = Depends(get_db)
+):
+    """
+    **ОПАСНАЯ ОПЕРАЦИЯ**: Удаление всех игроков из турнира.
+    
+    Требует явного подтверждения через параметр confirm=true.
+    
+    **Параметры:**
+    - tournament_id: ID турнира (0=МФЛ, 1=ЮФЛ-1, 2=ЮФЛ-2, 3=ЮФЛ-3)
+    - confirm: Должно быть true для подтверждения удаления
+    
+    **Использование:**
+    ```
+    DELETE /api/tournaments/2/players?confirm=true
+    ```
+    
+    После удаления вы можете загрузить правильный файл для турнира.
+    """
+    try:
+        # Проверяем существование турнира
+        if tournament_id not in settings.tournaments:
+            raise HTTPException(status_code=404, detail="Tournament not found")
+        
+        # Требуем подтверждения
+        if not confirm:
+            raise HTTPException(
+                status_code=400, 
+                detail="Confirmation required. Add ?confirm=true to delete all players from tournament"
+            )
+        
+        tournament_name = settings.get_tournament_name(tournament_id)
+        
+        # Подсчитываем количество игроков перед удалением
+        players_count = db.query(func.count(PlayerStatsRaw.id)).filter(
+            PlayerStatsRaw.tournament_id == tournament_id
+        ).scalar() or 0
+        
+        if players_count == 0:
+            return {
+                "tournament_id": tournament_id,
+                "tournament_name": tournament_name,
+                "deleted_count": 0,
+                "message": "No players found in this tournament"
+            }
+        
+        # Также удаляем из last_round_stats если есть
+        last_round_count = db.query(func.count(LastRoundStats.id)).filter(
+            LastRoundStats.tournament_id == tournament_id
+        ).scalar() or 0
+        
+        # Удаляем игроков из основной таблицы
+        deleted_main = db.query(PlayerStatsRaw).filter(
+            PlayerStatsRaw.tournament_id == tournament_id
+        ).delete(synchronize_session=False)
+        
+        # Удаляем из last_round_stats
+        deleted_last_round = db.query(LastRoundStats).filter(
+            LastRoundStats.tournament_id == tournament_id
+        ).delete(synchronize_session=False)
+        
+        # Фиксируем изменения
+        db.commit()
+        
+        logger.warning(f"DELETED ALL PLAYERS from tournament {tournament_id} ({tournament_name}): "
+                      f"{deleted_main} from main table, {deleted_last_round} from last_round")
+        
+        return {
+            "success": True,
+            "tournament_id": tournament_id,
+            "tournament_name": tournament_name,
+            "deleted_from_main_table": deleted_main,
+            "deleted_from_last_round": deleted_last_round,
+            "total_deleted": deleted_main + deleted_last_round,
+            "message": f"Successfully deleted all {deleted_main} players from tournament '{tournament_name}'. "
+                      f"You can now upload the correct file."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting players from tournament {tournament_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete players: {str(e)}")
+
+

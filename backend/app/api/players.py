@@ -126,6 +126,8 @@ async def get_all_players_database(
     max_goals: Optional[int] = Query(None, ge=0, description="Максимальное количество голов"),
     min_assists: Optional[int] = Query(None, ge=0, description="Минимальное количество ассистов"),
     max_assists: Optional[int] = Query(None, ge=0, description="Максимальное количество ассистов"),
+    sort_field: str = Query("player_name", description="Поле для сортировки"),
+    sort_order: str = Query("asc", regex="^(asc|desc)$", description="Порядок сортировки (asc/desc)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -134,6 +136,7 @@ async def get_all_players_database(
     Поддерживает:
     - Поиск по имени игрока, команде, позиции
     - Фильтрацию по турниру, позиции, голам, ассистам
+    - Сортировку по любому полю
     - Пагинацию
     """
     try:
@@ -172,10 +175,22 @@ async def get_all_players_database(
         # Подсчитываем общее количество записей
         total_count = query.count()
         
-        # Применяем пагинацию и сортировку
-        players = query.order_by(
-            PlayerStatsRaw.player_name.asc()
-        ).offset((page - 1) * limit).limit(limit).all()
+        # Применяем сортировку
+        # Проверяем что поле существует в модели
+        if hasattr(PlayerStatsRaw, sort_field):
+            sort_column = getattr(PlayerStatsRaw, sort_field)
+            if sort_order == "desc":
+                # NULL значения всегда в конце
+                query = query.order_by(sort_column.desc().nullslast())
+            else:
+                # NULL значения всегда в конце
+                query = query.order_by(sort_column.asc().nullslast())
+        else:
+            # Если поле не существует, сортируем по имени игрока
+            query = query.order_by(PlayerStatsRaw.player_name.asc().nullslast())
+        
+        # Применяем пагинацию
+        players = query.offset((page - 1) * limit).limit(limit).all()
         
         # Преобразуем в формат ответа
         player_responses = []

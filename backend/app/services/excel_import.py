@@ -5,6 +5,7 @@
 
 import logging
 import pandas as pd
+import numpy as np
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -200,6 +201,8 @@ class ExcelImportService:
         for col in percentage_columns:
             if col in df_clean.columns:
                 df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
+                # Заменяем NaN, Inf, -Inf на None (станет NULL в БД)
+                df_clean[col] = df_clean[col].replace([np.nan, np.inf, -np.inf], None)
         
         # Обрабатываем текстовые колонки
         text_columns = ['player_name', 'team_name', 'position', 'citizenship', 'player_index', 'height', 'weight']
@@ -242,12 +245,20 @@ class ExcelImportService:
                 # Обновляем существующего игрока
                 for column, value in row.items():
                     if hasattr(existing_player, column) and column not in ['id', 'created_at']:
+                        # Заменяем NaN и inf на None перед вставкой
+                        if pd.isna(value) or (isinstance(value, float) and not np.isfinite(value)):
+                            value = None
                         setattr(existing_player, column, value)
                 updated_count += 1
                 logger.debug(f"Updated player: {row['player_name']}")
             else:
                 # Создаём нового игрока
                 player_data = row.to_dict()
+                # Очищаем NaN и inf значения перед вставкой
+                for key, value in player_data.items():
+                    if pd.isna(value) or (isinstance(value, float) and not np.isfinite(value)):
+                        player_data[key] = None
+                
                 player_data['tournament_id'] = tournament_id
                 player_data['tracking_status'] = 'non interesting'  # По умолчанию
                 
@@ -314,7 +325,11 @@ class ExcelImportService:
             
             for stat in basic_stats:
                 if stat in row and pd.notna(row[stat]):
-                    last_round_data[stat] = row[stat]
+                    value = row[stat]
+                    # Заменяем NaN и inf на None перед вставкой
+                    if isinstance(value, float) and not np.isfinite(value):
+                        value = None
+                    last_round_data[stat] = value
             
             # Создаём запись
             last_round_player = LastRoundStats(**last_round_data)
@@ -329,7 +344,7 @@ class ExcelImportService:
         file_path: Path, 
         tournament_id: int,
         import_to_main: bool = True,
-        import_to_last_round: bool = True,
+        import_to_last_round: bool = False,
         round_number: Optional[int] = None
     ) -> Dict:
         """
@@ -363,6 +378,11 @@ class ExcelImportService:
             
             # Импорт в базу данных
             with DatabaseTransaction() as session:
+                # Финальная очистка NaN перед импортом
+                # Заменяем все NaN, Inf, -Inf на None во всём DataFrame
+                df_clean = df_clean.replace([np.nan, np.inf, -np.inf], None)
+                df_clean = df_clean.where(pd.notnull(df_clean), None)
+                
                 result = {
                     'file_name': file_path.name,
                     'tournament_id': tournament_id,

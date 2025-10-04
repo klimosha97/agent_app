@@ -33,7 +33,7 @@ async def upload_excel_file(
     file: UploadFile = File(..., description="Excel файл с статистикой игроков"),
     tournament_id: Optional[int] = Form(None, ge=0, le=3, description="ID турнира (автоопределение если None)"),
     import_to_main: bool = Form(True, description="Импортировать в основную таблицу"),
-    import_to_last_round: bool = Form(True, description="Импортировать в таблицу последнего тура"),
+    import_to_last_round: bool = Form(False, description="Импортировать в таблицу последнего тура"),
     round_number: Optional[int] = Form(None, ge=1, description="Номер тура"),
     db: Session = Depends(get_db)
 ):
@@ -44,7 +44,7 @@ async def upload_excel_file(
     - **file**: Excel файл (.xlsx или .xls)
     - **tournament_id**: ID турнира (0=МФЛ, 1=ЮФЛ-1, 2=ЮФЛ-2, 3=ЮФЛ-3). Если не указан, определяется по имени файла
     - **import_to_main**: Импортировать в основную таблицу (по умолчанию true)
-    - **import_to_last_round**: Импортировать в таблицу последнего тура (по умолчанию true)  
+    - **import_to_last_round**: Импортировать в таблицу последнего тура (по умолчанию false)  
     - **round_number**: Номер тура (опционально)
     
     **Процесс обработки:**
@@ -52,7 +52,7 @@ async def upload_excel_file(
     2. Определение турнира (автоматически или вручную)
     3. Парсинг Excel данных
     4. Очистка и нормализация данных
-    5. Импорт в базу данных
+    5. Импорт ТОЛЬКО в основную таблицу players_stats_raw (если не указано иное)
     6. Возврат результатов
     """
     start_time = datetime.now()
@@ -91,10 +91,12 @@ async def upload_excel_file(
             logger.error(f"Failed to save file {file.filename}: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
         
-        # Определяем турнир если не указан
+        # Определяем турнир из имени файла
+        file_tournament_id = excel_service.get_tournament_from_filename(file.filename)
+        
+        # Если tournament_id не указан явно, используем определённый из имени файла
         if tournament_id is None:
-            tournament_id = excel_service.get_tournament_from_filename(file.filename)
-            if tournament_id is None:
+            if file_tournament_id is None:
                 # Удаляем файл если турнир не определён
                 try:
                     os.unlink(file_path)
@@ -104,6 +106,33 @@ async def upload_excel_file(
                     status_code=400,
                     detail="Could not determine tournament from filename. Please specify tournament_id manually. "
                            "Expected patterns: mfl, yfl1, yfl2, yfl3 in filename"
+                )
+            tournament_id = file_tournament_id
+        else:
+            # Если tournament_id указан, проверяем соответствие с именем файла
+            if file_tournament_id is not None and file_tournament_id != tournament_id:
+                # Удаляем файл при несоответствии
+                try:
+                    os.unlink(file_path)
+                except:
+                    pass
+                
+                expected_patterns = {
+                    0: "mfl",
+                    1: "yfl1",
+                    2: "yfl2",
+                    3: "yfl3"
+                }
+                
+                tournament_name = settings.get_tournament_name(tournament_id)
+                file_tournament_name = settings.get_tournament_name(file_tournament_id)
+                expected_pattern = expected_patterns.get(tournament_id, "unknown")
+                
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Несоответствие файла турниру! Вы выбрали турнир '{tournament_name}' (ожидается '{expected_pattern}' в имени файла), "
+                           f"но файл '{file.filename}' предназначен для турнира '{file_tournament_name}'. "
+                           f"Пожалуйста, загрузите правильный файл."
                 )
         
         logger.info(f"Processing file {file.filename} for tournament {tournament_id}")
@@ -195,9 +224,10 @@ async def get_supported_formats():
         },
         "processing_info": {
             "main_table_import": "Импорт в основную таблицу (players_stats_raw) с обновлением существующих игроков",
-            "last_round_import": "Импорт в таблицу последнего тура (last_round_stats) с полной заменой данных",
+            "last_round_import": "Импорт в таблицу последнего тура (last_round_stats) - опционально, по умолчанию отключено",
             "data_normalization": "Автоматическая очистка и преобразование данных",
-            "player_matching": "Поиск игроков по имени и команде для обновления статуса отслеживания"
+            "player_matching": "Поиск игроков по имени и команде для обновления статуса отслеживания",
+            "default_behavior": "По умолчанию данные добавляются ТОЛЬКО в players_stats_raw"
         }
     }
 

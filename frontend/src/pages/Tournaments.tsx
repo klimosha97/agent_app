@@ -74,7 +74,7 @@ export const Tournaments: React.FC = () => {
         tournamentId,
         options: {
           importToMain: true,
-          importToLastRound: true,
+          importToLastRound: false,
         }
       });
       
@@ -84,7 +84,19 @@ export const Tournaments: React.FC = () => {
       alert('Файл успешно загружен!');
     } catch (error: any) {
       console.error('Upload failed:', error);
-      alert(`Ошибка загрузки: ${error.message || 'Неизвестная ошибка'}`);
+      
+      // Извлекаем детальное сообщение об ошибке
+      let errorMessage = 'Неизвестная ошибка';
+      if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      alert(`Ошибка загрузки: ${errorMessage}`);
+      
+      // Сбрасываем input при ошибке
+      event.target.value = '';
     } finally {
       setUploadingFile(null);
     }
@@ -137,7 +149,7 @@ export const Tournaments: React.FC = () => {
                 ) : (
                   <>
                     <DocumentArrowUpIcon className="w-4 h-4 mr-2" />
-                    Загрузить XLSX
+                    Загрузка XLSX турнира
                   </>
                 )}
               </label>

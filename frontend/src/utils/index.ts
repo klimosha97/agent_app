@@ -39,7 +39,10 @@ export function formatStats(value?: number): string {
 
 export function formatPercentage(value?: number): string {
   if (value === undefined || value === null) return '-';
-  return `${value.toFixed(1)}%`;
+  // Округляем до ближайшего 0.5
+  const rounded = Math.round(value * 2) / 2;
+  const displayValue = rounded % 1 === 0 ? rounded : rounded.toFixed(1);
+  return `${displayValue}%`;
 }
 
 export function formatDecimal(value?: number, decimals: number = 2): string {
