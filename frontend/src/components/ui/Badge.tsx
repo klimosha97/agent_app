@@ -9,7 +9,7 @@ import { getTrackingStatusColor, getTrackingStatusLabel } from '../../utils';
 
 interface BadgeProps {
   children: React.ReactNode;
-  variant?: 'gray' | 'red' | 'yellow' | 'green' | 'blue' | 'indigo' | 'purple';
+  variant?: 'gray' | 'red' | 'yellow' | 'green' | 'blue' | 'indigo' | 'purple' | 'warning';
   size?: 'sm' | 'md' | 'lg';
   className?: string;
 }
@@ -30,6 +30,7 @@ export const Badge: React.FC<BadgeProps> = ({
     blue: 'bg-blue-100 text-blue-800',
     indigo: 'bg-indigo-100 text-indigo-800',
     purple: 'bg-purple-100 text-purple-800',
+    warning: 'bg-amber-100 text-amber-800 border border-amber-300',
   };
 
   const sizeClasses = {

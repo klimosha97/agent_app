@@ -320,7 +320,8 @@ class ApiService {
     per_page: number = 100, 
     search?: string,
     sort_field?: string,
-    sort_order?: 'asc' | 'desc'
+    sort_order?: 'asc' | 'desc',
+    tournament_id?: number
   ): Promise<PlayerListResponse> => {
     const params: any = { page, limit: per_page };
     if (search && search.trim()) {
@@ -331,6 +332,9 @@ class ApiService {
     }
     if (sort_order) {
       params.sort_order = sort_order;
+    }
+    if (tournament_id !== undefined) {
+      params.tournament_id = tournament_id;
     }
     const response = await this.api.get('/players/raw-data', { params });
     return response.data;

@@ -604,3 +604,55 @@ async def get_last_round_players(
         raise HTTPException(status_code=500, detail=f"Failed to retrieve last round players: {str(e)}")
 
 
+@router.delete("/database/clear-all", summary="Очистить все таблицы")
+async def clear_all_tables(
+    confirm: bool = Query(False, description="Подтверждение очистки (должно быть true)"),
+    db: Session = Depends(get_db)
+):
+    """
+    **ОПАСНАЯ ОПЕРАЦИЯ**: Очистка всех таблиц с данными игроков.
+    
+    Удаляет все записи из:
+    - players_stats_raw
+    - last_round_stats
+    - position_averages
+    
+    Требует явного подтверждения через параметр confirm=true.
+    """
+    try:
+        if not confirm:
+            raise HTTPException(
+                status_code=400, 
+                detail="Требуется подтверждение. Добавьте ?confirm=true для очистки всех таблиц"
+            )
+        
+        # Подсчитываем записи перед удалением
+        players_count = db.query(func.count(PlayerStatsRaw.id)).scalar() or 0
+        last_round_count = db.query(func.count(LastRoundStats.id)).scalar() or 0
+        
+        # Удаляем все записи
+        deleted_players = db.query(PlayerStatsRaw).delete(synchronize_session=False)
+        deleted_last_round = db.query(LastRoundStats).delete(synchronize_session=False)
+        
+        # Фиксируем изменения
+        db.commit()
+        
+        logger.warning(f"CLEARED ALL TABLES: {deleted_players} players, {deleted_last_round} last_round records")
+        
+        return {
+            "success": True,
+            "message": "Все таблицы успешно очищены",
+            "deleted": {
+                "players_stats_raw": deleted_players,
+                "last_round_stats": deleted_last_round
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error clearing tables: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка очистки таблиц: {str(e)}")
+
+

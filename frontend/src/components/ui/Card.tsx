@@ -11,6 +11,7 @@ interface CardProps {
   padding?: 'none' | 'sm' | 'md' | 'lg';
   shadow?: 'none' | 'sm' | 'md' | 'lg';
   hover?: boolean;
+  onClick?: () => void;
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -19,6 +20,7 @@ export const Card: React.FC<CardProps> = ({
   padding = 'md',
   shadow = 'sm',
   hover = false,
+  onClick,
 }) => {
   const baseClasses = 'bg-white rounded-lg border border-gray-200';
 
@@ -47,6 +49,7 @@ export const Card: React.FC<CardProps> = ({
         hoverClasses,
         className
       )}
+      onClick={onClick}
     >
       {children}
     </div>

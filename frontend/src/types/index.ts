@@ -246,7 +246,7 @@ export interface AppState {
 // === Константы ===
 
 export const TOURNAMENTS = {
-  0: { name: 'МФЛ', full_name: 'Московская Футбольная Лига', code: 'mfl' },
+  0: { name: 'МФЛ', full_name: 'Молодежная Футбольная Лига', code: 'mfl' },
   1: { name: 'ЮФЛ-1', full_name: 'Юношеская Футбольная Лига - 1', code: 'yfl1' },
   2: { name: 'ЮФЛ-2', full_name: 'Юношеская Футбольная Лига - 2', code: 'yfl2' },
   3: { name: 'ЮФЛ-3', full_name: 'Юношеская Футбольная Лига - 3', code: 'yfl3' },

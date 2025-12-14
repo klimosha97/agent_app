@@ -322,11 +322,12 @@ export function useAllPlayersData(
   per_page: number = 100, 
   search?: string,
   sort_field?: string,
-  sort_order?: 'asc' | 'desc'
+  sort_order?: 'asc' | 'desc',
+  tournament_id?: number
 ) {
   return useQuery(
-    ['allPlayersData', page, per_page, search, sort_field, sort_order],
-    () => apiService.getAllPlayersDatabase(page, per_page, search, sort_field, sort_order),
+    ['allPlayersData', page, per_page, search, sort_field, sort_order, tournament_id],
+    () => apiService.getAllPlayersDatabase(page, per_page, search, sort_field, sort_order, tournament_id),
     {
       retry: 1,
       staleTime: 5 * 60 * 1000, // 5 минут

@@ -217,6 +217,21 @@ export function formatDate(dateString: string): string {
   }
 }
 
+/**
+ * Форматирует дату в формате DD.MM.YYYY
+ */
+export function formatDateShort(dateString: string): string {
+  try {
+    const date = new Date(dateString);
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}.${month}.${year}`;
+  } catch {
+    return 'Нет данных';
+  }
+}
+
 export function formatDateTime(dateString: string): string {
   try {
     const date = new Date(dateString);

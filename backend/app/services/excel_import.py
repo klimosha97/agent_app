@@ -155,6 +155,12 @@ class ExcelImportService:
         """
         Очистка и преобразование данных.
         
+        ПРАВИЛА:
+        - Все числа сохраняются как целые (int)
+        - Только xG сохраняется как float с плавающей точкой
+        - Проценты в Excel хранятся как десятичные дроби (0.79 = 79%), 
+          умножаем на 100 и округляем до целого
+        
         Args:
             df: DataFrame с данными
             
@@ -167,8 +173,8 @@ class ExcelImportService:
         # Заменяем пустые значения и дефисы на None/0
         df_clean = df_clean.replace(['-', '', 'nan', 'NaN'], None)
         
-        # Преобразование числовых колонок
-        numeric_columns = [
+        # Обычные числовые колонки (целые числа, без умножения)
+        integer_columns = [
             'player_number', 'age', 'minutes_played', 'goal_errors', 'rough_errors',
             'goals', 'assists', 'goal_attempts', 'goal_attempts_successful',
             'goal_moments_created', 'goal_attacks_participation', 'shots',
@@ -181,7 +187,7 @@ class ExcelImportService:
             'interceptions', 'recoveries'
         ]
         
-        # Преобразование процентных колонок
+        # Процентные колонки (нужно умножить на 100, так как в Excel хранятся как 0.79 = 79%)
         percentage_columns = [
             'goal_attempts_success_rate', 'passes_accuracy', 'passes_key_accuracy',
             'crosses_accuracy', 'passes_progressive_accuracy', 'passes_long_accuracy',
@@ -189,20 +195,31 @@ class ExcelImportService:
             'passes_penalty_area_accuracy', 'duels_success_rate',
             'duels_defensive_success_rate', 'duels_offensive_success_rate',
             'duels_aerial_success_rate', 'dribbles_success_rate',
-            'dribbles_final_third_success_rate', 'tackles_success_rate', 'xg'
+            'dribbles_final_third_success_rate', 'tackles_success_rate'
         ]
         
-        # Обрабатываем числовые колонки
-        for col in numeric_columns:
+        # Обрабатываем обычные числовые колонки
+        for col in integer_columns:
             if col in df_clean.columns:
-                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0).astype(int)
+                numeric_values = pd.to_numeric(df_clean[col], errors='coerce')
+                df_clean[col] = numeric_values.apply(
+                    lambda x: None if pd.isna(x) or not np.isfinite(x) else int(round(x))
+                )
         
-        # Обрабатываем процентные колонки
+        # Обрабатываем процентные колонки (умножаем на 100)
         for col in percentage_columns:
             if col in df_clean.columns:
-                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
-                # Заменяем NaN, Inf, -Inf на None (станет NULL в БД)
-                df_clean[col] = df_clean[col].replace([np.nan, np.inf, -np.inf], None)
+                numeric_values = pd.to_numeric(df_clean[col], errors='coerce')
+                # Умножаем на 100 и округляем до целого (0.79 -> 79)
+                df_clean[col] = numeric_values.apply(
+                    lambda x: None if pd.isna(x) or not np.isfinite(x) else int(round(x * 100))
+                )
+        
+        # ТОЛЬКО xG остаётся float (не умножаем!)
+        if 'xg' in df_clean.columns:
+            df_clean['xg'] = pd.to_numeric(df_clean['xg'], errors='coerce')
+            # Заменяем NaN, Inf, -Inf на None (станет NULL в БД)
+            df_clean['xg'] = df_clean['xg'].replace([np.nan, np.inf, -np.inf], None)
         
         # Обрабатываем текстовые колонки
         text_columns = ['player_name', 'team_name', 'position', 'citizenship', 'player_index', 'height', 'weight']
