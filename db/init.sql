@@ -1,9 +1,6 @@
 -- Инициализация базы данных для приложения статистики футболистов
 -- Этот скрипт выполняется автоматически при первом запуске PostgreSQL контейнера
 
--- Создание базы данных (если не существует)
--- Не нужно, так как POSTGRES_DB в docker-compose создаст её автоматически
-
 -- Создание расширений для работы с UUID
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -18,6 +15,18 @@ BEGIN
             'interesting',      -- интересный игрок  
             'to watch',         -- игрок для наблюдения
             'my player'         -- мой игрок
+        );
+    END IF;
+END$$;
+
+-- Enum для типа статистики
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'stat_type_enum') THEN
+        CREATE TYPE stat_type_enum AS ENUM (
+            'total',      -- Всего за сезон/тур
+            'avg_match',  -- В среднем за матч
+            'avg_90min'   -- В среднем за 90 минут
         );
     END IF;
 END$$;
@@ -44,13 +53,14 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Базовая таблица-справочник турниров для удобства
+-- Базовая таблица-справочник турниров
 CREATE TABLE IF NOT EXISTS tournaments (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL UNIQUE,
     full_name VARCHAR(255) NOT NULL,
     short_code VARCHAR(10) NOT NULL UNIQUE,
     is_active BOOLEAN DEFAULT true,
+    current_round INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -63,22 +73,17 @@ CREATE TRIGGER update_tournaments_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- Заполнение справочника турниров
-INSERT INTO tournaments (id, name, full_name, short_code) VALUES
-(0, 'МФЛ', 'Молодежная Футбольная Лига', 'MFL'),
-(1, 'ЮФЛ-1', 'Юношеская Футбольная Лига - Первенство 1', 'YFL1'),
-(2, 'ЮФЛ-2', 'Юношеская Футбольная Лига - Первенство 2', 'YFL2'),
-(3, 'ЮФЛ-3', 'Юношеская Футбольная Лига - Первенство 3', 'YFL3')
+INSERT INTO tournaments (id, name, full_name, short_code, current_round) VALUES
+(0, 'МФЛ', 'Молодежная Футбольная Лига', 'MFL', 0),
+(1, 'ЮФЛ-1', 'Юношеская Футбольная Лига - Первенство 1', 'YFL1', 0),
+(2, 'ЮФЛ-2', 'Юношеская Футбольная Лига - Первенство 2', 'YFL2', 0),
+(3, 'ЮФЛ-3', 'Юношеская Футбольная Лига - Первенство 3', 'YFL3', 0)
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     full_name = EXCLUDED.full_name,
     short_code = EXCLUDED.short_code;
 
--- Создание индексов для повышения производительности
-
--- Индексы будут созданы автоматически Alembic миграциями
--- но можно создать базовые индексы здесь для начальной производительности
-
--- Комментарии для понимания структуры данных
+-- Комментарии
 COMMENT ON DATABASE football_stats IS 'База данных для хранения и анализа статистики футболистов';
 COMMENT ON SCHEMA public IS 'Основная схема для таблиц статистики игроков';
 COMMENT ON TABLE tournaments IS 'Справочник турниров/лиг';
@@ -90,7 +95,6 @@ BEGIN
         CREATE ROLE football_readonly;
         GRANT CONNECT ON DATABASE football_stats TO football_readonly;
         GRANT USAGE ON SCHEMA public TO football_readonly;
-        -- Права на чтение будут добавлены после создания таблиц через Alembic
     END IF;
 END$$;
 
@@ -102,5 +106,3 @@ BEGIN
     RAISE NOTICE 'User: klim';
     RAISE NOTICE 'Tournaments loaded: % rows', (SELECT COUNT(*) FROM tournaments);
 END$$;
-
-

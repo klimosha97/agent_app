@@ -22,6 +22,9 @@ export interface ApiError {
 
 export type TrackingStatus = 'non interesting' | 'interesting' | 'to watch' | 'my player';
 
+// Тип статистики
+export type StatType = 'total' | 'avg_match' | 'avg_90min';
+
 export interface Player {
   id: string;
   player_name: string;
@@ -33,6 +36,8 @@ export interface Player {
   citizenship?: string;
   player_index?: string;
   tournament_id: number;
+  stat_type?: StatType;
+  round_number?: number;
   tracking_status: TrackingStatus;
   minutes_played?: number;
   player_number?: number;
@@ -100,7 +105,7 @@ export interface PlayerListResponse extends BaseResponse {
   total: number;
   page: number;
   per_page: number;
-  total_pages: number;
+  pages: number;
 }
 
 export interface PlayerDetailResponse extends BaseResponse {
@@ -131,6 +136,8 @@ export interface Tournament {
   full_name: string;
   code: string;
   players_count: number;
+  round_players_count?: number;
+  current_round?: number;
   last_update?: string;
 }
 
@@ -279,5 +286,3 @@ export type WithLoading<T> = T & LoadingState;
 export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
 export type RequiredFields<T, K extends keyof T> = T & Required<Pick<T, K>>;
-
-

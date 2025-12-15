@@ -95,8 +95,8 @@ export function useTournamentPlayers(
 
 export function useTournaments() {
   return useQuery('tournaments', () => apiService.getTournaments(), {
-    staleTime: 10 * 60 * 1000, // 10 минут
-    refetchOnWindowFocus: false,
+    staleTime: 30 * 1000, // 30 секунд - чтобы players_count обновлялся быстрее
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -153,38 +153,6 @@ export function useUpdatePlayerStatus() {
       },
       onError: (error) => {
         console.error('Failed to update player status:', error);
-      },
-    }
-  );
-}
-
-export function useUploadExcelFile() {
-  const queryClient = useQueryClient();
-
-  return useMutation(
-    ({
-      file,
-      tournamentId,
-      options,
-    }: {
-      file: File;
-      tournamentId?: number;
-      options?: {
-        importToMain?: boolean;
-        importToLastRound?: boolean;
-        roundNumber?: number;
-      };
-    }) => apiService.uploadExcelFile(file, tournamentId, options),
-    {
-      onSuccess: () => {
-        // Инвалидируем все запросы связанные с игроками
-        queryClient.invalidateQueries(['players']);
-        queryClient.invalidateQueries(['tournamentPlayers']);
-        queryClient.invalidateQueries(['topPerformers']);
-        queryClient.invalidateQueries(['tournaments']);
-      },
-      onError: (error) => {
-        console.error('Failed to upload Excel file:', error);
       },
     }
   );
@@ -313,28 +281,6 @@ export function usePlayerSearchWithState() {
     handleSearch,
     handleStatusUpdate,
   };
-}
-
-// === Хук для получения всех данных из базы ===
-
-export function useAllPlayersData(
-  page: number = 1, 
-  per_page: number = 100, 
-  search?: string,
-  sort_field?: string,
-  sort_order?: 'asc' | 'desc',
-  tournament_id?: number
-) {
-  return useQuery(
-    ['allPlayersData', page, per_page, search, sort_field, sort_order, tournament_id],
-    () => apiService.getAllPlayersDatabase(page, per_page, search, sort_field, sort_order, tournament_id),
-    {
-      retry: 1,
-      staleTime: 5 * 60 * 1000, // 5 минут
-      refetchOnWindowFocus: false,
-      keepPreviousData: true, // Сохраняем предыдущие данные при смене страницы для плавного UX
-    }
-  );
 }
 
 // === Хук для проверки состояния приложения ===

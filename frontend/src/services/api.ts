@@ -32,7 +32,7 @@ class ApiService {
     // Создаём экземпляр axios
     this.api = axios.create({
       baseURL: this.baseURL,
-      timeout: 10000, // 10 секунд
+      timeout: 300000, // 5 минут для больших файлов
       headers: {
         'Content-Type': 'application/json',
       },
@@ -182,6 +182,73 @@ class ApiService {
     return response.data;
   }
 
+  async getAllPlayersFromDatabase(
+    page: number = 1,
+    limit: number = 100,
+    sliceType: 'TOTAL' | 'PER90' = 'TOTAL',
+    search?: string,
+    tournamentId?: number,
+    positionGroup?: string,
+    sortField?: string,
+    sortOrder?: 'asc' | 'desc'
+  ): Promise<PlayerListResponse> {
+    const params = new URLSearchParams();
+    params.append('page', page.toString());
+    params.append('limit', limit.toString());
+    params.append('slice_type', sliceType);
+    
+    if (search) {
+      params.append('search', search);
+    }
+    if (tournamentId !== undefined) {
+      params.append('tournament_id', tournamentId.toString());
+    }
+    if (positionGroup) {
+      params.append('position_group', positionGroup);
+    }
+    if (sortField) {
+      params.append('sort_field', sortField);
+    }
+    if (sortOrder) {
+      params.append('sort_order', sortOrder);
+    }
+
+    const response = await this.api.get<PlayerListResponse>(`/players/database?${params}`);
+    return response.data;
+  }
+
+  async uploadTournamentFile(
+    file: File,
+    tournamentId: number,
+    sliceType: 'TOTAL' | 'PER90',
+    season?: string,
+    round?: number
+  ): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('tournament_id', tournamentId.toString());
+    formData.append('slice_type', sliceType);
+    
+    if (season) {
+      formData.append('season', season);
+    }
+    if (round !== undefined) {
+      formData.append('round', round.toString());
+    }
+
+    const response = await this.api.post('/upload/tournament', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  }
+
+  async clearDatabase(): Promise<any> {
+    const response = await this.api.post('/database/clear');
+    return response.data;
+  }
+
   async getTournamentPlayers(
     tournamentId: number,
     sort?: SortOptions,
@@ -259,86 +326,7 @@ class ApiService {
     return response.data;
   }
 
-  // === Методы для загрузки файлов ===
-
-  async uploadExcelFile(
-    file: File,
-    tournamentId?: number,
-    options?: {
-      importToMain?: boolean;
-      importToLastRound?: boolean;
-      roundNumber?: number;
-    }
-  ): Promise<FileUploadResponse> {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    if (tournamentId !== undefined) {
-      formData.append('tournament_id', tournamentId.toString());
-    }
-    if (options?.importToMain !== undefined) {
-      formData.append('import_to_main', options.importToMain.toString());
-    }
-    if (options?.importToLastRound !== undefined) {
-      formData.append('import_to_last_round', options.importToLastRound.toString());
-    }
-    if (options?.roundNumber) {
-      formData.append('round_number', options.roundNumber.toString());
-    }
-
-    const response = await this.api.post<FileUploadResponse>('/upload-excel', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-
-    return response.data;
-  }
-
-  async getSupportedFormats(): Promise<any> {
-    const response = await this.api.get('/upload/supported-formats');
-    return response.data;
-  }
-
-  async getUploadedFiles(): Promise<any> {
-    const response = await this.api.get('/upload/files');
-    return response.data;
-  }
-
-  async deleteUploadedFile(fileName: string): Promise<any> {
-    const response = await this.api.delete(`/upload/${fileName}`);
-    return response.data;
-  }
-
   // === Служебные методы ===
-
-  /**
-   * Получить все данные из базы players_stats_raw
-   */
-  getAllPlayersDatabase = async (
-    page: number = 1, 
-    per_page: number = 100, 
-    search?: string,
-    sort_field?: string,
-    sort_order?: 'asc' | 'desc',
-    tournament_id?: number
-  ): Promise<PlayerListResponse> => {
-    const params: any = { page, limit: per_page };
-    if (search && search.trim()) {
-      params.search = search.trim();
-    }
-    if (sort_field) {
-      params.sort_field = sort_field;
-    }
-    if (sort_order) {
-      params.sort_order = sort_order;
-    }
-    if (tournament_id !== undefined) {
-      params.tournament_id = tournament_id;
-    }
-    const response = await this.api.get('/players/raw-data', { params });
-    return response.data;
-  }
 
   async checkHealth(): Promise<any> {
     const response = await this.api.get('/health', { baseURL: this.baseURL.replace('/api', '') });

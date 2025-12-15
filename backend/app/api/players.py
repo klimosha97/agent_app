@@ -1,658 +1,308 @@
 """
 API роутер для работы с игроками.
-Содержит все endpoint'ы для получения, фильтрации и управления данными игроков.
 """
 
 import logging
-from typing import Optional, List
-from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Query, Path
+import shutil
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+from fastapi import APIRouter, Query, HTTPException, UploadFile, File, Form
+from sqlalchemy import text
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, and_, func
+from fastapi import Depends
 
 from app.database import get_db
-from app.models.player import PlayerStatsRaw, LastRoundStats
-from app.api.schemas import (
-    PlayerListResponse, PlayerDetailResponse, PlayerStatusUpdate,
-    PlayerStatusResponse, PlayerFilters, SortOptions, PaginationParams,
-    PlayerResponse, TrackingStatus, PlayerSearchResponse, PlayerSearchResult
-)
-from app.config import settings
+from app.services.data_loader import DataLoader
 
 logger = logging.getLogger(__name__)
 
-# Создаём роутер
 router = APIRouter()
 
 
-@router.get("/players", response_model=PlayerListResponse, summary="Получить список игроков")
-async def get_players(
-    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
-    team_name: Optional[str] = Query(None, description="Название команды"),
-    position: Optional[str] = Query(None, description="Позиция"),
-    tracking_status: Optional[TrackingStatus] = Query(None, description="Статус отслеживания"),
-    min_goals: Optional[int] = Query(None, ge=0, description="Минимум голов"),
-    min_assists: Optional[int] = Query(None, ge=0, description="Минимум ассистов"),
-    min_minutes: Optional[int] = Query(None, ge=0, description="Минимум минут"),
-    search_query: Optional[str] = Query(None, description="Поиск по имени игрока"),
-    sort_field: str = Query("player_name", description="Поле для сортировки"),
-    sort_order: str = Query("asc", regex="^(asc|desc)$", description="Порядок сортировки"),
-    page: int = Query(1, ge=1, description="Номер страницы"),
-    per_page: int = Query(50, ge=1, le=500, description="Количество на странице"),
-    db: Session = Depends(get_db)
-):
-    """
-    Получение списка игроков с фильтрацией, сортировкой и пагинацией.
-    
-    - **tournament_id**: Фильтр по турниру (0=МФЛ, 1=ЮФЛ-1, 2=ЮФЛ-2, 3=ЮФЛ-3)
-    - **team_name**: Фильтр по команде
-    - **position**: Фильтр по позиции
-    - **tracking_status**: Фильтр по статусу отслеживания
-    - **min_goals/min_assists/min_minutes**: Минимальные значения статистики
-    - **search_query**: Поиск по имени игрока (нечёткий поиск)
-    - **sort_field**: Поле сортировки (player_name, goals, assists, и т.д.)
-    - **sort_order**: Порядок сортировки (asc/desc)
-    """
-    try:
-        # Начинаем запрос
-        query = db.query(PlayerStatsRaw)
-        
-        # Применяем фильтры
-        if tournament_id is not None:
-            query = query.filter(PlayerStatsRaw.tournament_id == tournament_id)
-        
-        if team_name:
-            query = query.filter(PlayerStatsRaw.team_name.ilike(f"%{team_name}%"))
-        
-        if position:
-            query = query.filter(PlayerStatsRaw.position.ilike(f"%{position}%"))
-        
-        if tracking_status:
-            query = query.filter(PlayerStatsRaw.tracking_status == tracking_status.value)
-        
-        if min_goals is not None:
-            query = query.filter(PlayerStatsRaw.goals >= min_goals)
-        
-        if min_assists is not None:
-            query = query.filter(PlayerStatsRaw.assists >= min_assists)
-        
-        if min_minutes is not None:
-            query = query.filter(PlayerStatsRaw.minutes_played >= min_minutes)
-        
-        if search_query:
-            search_filter = PlayerStatsRaw.player_name.ilike(f"%{search_query}%")
-            query = query.filter(search_filter)
-        
-        # Подсчитываем общее количество
-        total_count = query.count()
-        
-        # Применяем сортировку
-        sort_column = getattr(PlayerStatsRaw, sort_field, PlayerStatsRaw.player_name)
-        if sort_order == "desc":
-            query = query.order_by(sort_column.desc())
-        else:
-            query = query.order_by(sort_column.asc())
-        
-        # Применяем пагинацию
-        offset = (page - 1) * per_page
-        players = query.offset(offset).limit(per_page).all()
-        
-        # Конвертируем в схемы ответа
-        players_data = [PlayerResponse.from_orm(player) for player in players]
-        
-        logger.info(f"Retrieved {len(players)} players (total: {total_count})")
-        
-        return PlayerListResponse(
-            data=players_data,
-            total=total_count,
-            page=page,
-            per_page=per_page,
-            message=f"Found {total_count} players"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error retrieving players: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve players: {str(e)}")
-
-
-@router.get("/players/raw-data", response_model=PlayerListResponse, summary="Все игроки из базы данных")
+@router.get("/players/database")
 async def get_all_players_database(
-    page: int = Query(1, ge=1, description="Номер страницы"),
-    limit: int = Query(50, ge=1, le=1000, description="Количество записей на странице"),
-    search: Optional[str] = Query(None, description="Поиск по имени игрока, команде или позиции"),
     tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
-    position: Optional[str] = Query(None, description="Позиция игрока"),
-    min_goals: Optional[int] = Query(None, ge=0, description="Минимальное количество голов"),
-    max_goals: Optional[int] = Query(None, ge=0, description="Максимальное количество голов"),
-    min_assists: Optional[int] = Query(None, ge=0, description="Минимальное количество ассистов"),
-    max_assists: Optional[int] = Query(None, ge=0, description="Максимальное количество ассистов"),
-    sort_field: str = Query("player_name", description="Поле для сортировки"),
-    sort_order: str = Query("asc", regex="^(asc|desc)$", description="Порядок сортировки (asc/desc)"),
+    slice_type: str = Query("TOTAL", description="Тип статистики: TOTAL или PER90"),
+    search: Optional[str] = Query(None, description="Поиск по имени игрока или команде"),
+    position_group: Optional[str] = Query(None, description="Группа позиций: ATT, MID, DEF"),
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    limit: int = Query(100, ge=1, le=500, description="Записей на странице"),
+    sort_field: Optional[str] = Query(None, description="Поле для сортировки"),
+    sort_order: str = Query("desc", description="Порядок: asc или desc"),
     db: Session = Depends(get_db)
 ):
     """
-    Получить все записи из таблицы players_stats_raw с возможностью фильтрации и поиска.
+    Получить всех игроков из БД с полной статистикой (все 100+ метрик).
     
     Поддерживает:
-    - Поиск по имени игрока, команде, позиции
-    - Фильтрацию по турниру, позиции, голам, ассистам
-    - Сортировку по любому полю
+    - Фильтрацию по турниру
+    - Переключение TOTAL/PER90
+    - Поиск
+    - Фильтр по позиции
+    - Сортировку
     - Пагинацию
     """
     try:
-        # Базовый запрос
-        query = db.query(PlayerStatsRaw)
+        # Получаем список всех метрик из каталога
+        metrics_query = db.execute(text("SELECT metric_code FROM metrics_catalog"))
+        all_metrics = [row[0] for row in metrics_query.fetchall()]
         
-        # Применяем фильтры
-        if search:
-            search_term = f"%{search.lower()}%"
-            query = query.filter(
-                or_(
-                    func.lower(PlayerStatsRaw.player_name).like(search_term),
-                    func.lower(PlayerStatsRaw.team_name).like(search_term),
-                    func.lower(PlayerStatsRaw.position).like(search_term)
-                )
+        # Создаем PIVOT для всех метрик динамически
+        pivot_cases = []
+        for metric in all_metrics:
+            pivot_cases.append(
+                f"MAX(CASE WHEN ps.metric_code = '{metric}' THEN ps.metric_value END) as {metric}"
             )
         
-        if tournament_id is not None:
-            query = query.filter(PlayerStatsRaw.tournament_id == tournament_id)
-            
-        if position:
-            query = query.filter(func.lower(PlayerStatsRaw.position).like(f"%{position.lower()}%"))
-            
-        if min_goals is not None:
-            query = query.filter(PlayerStatsRaw.goals >= min_goals)
-            
-        if max_goals is not None:
-            query = query.filter(PlayerStatsRaw.goals <= max_goals)
-            
-        if min_assists is not None:
-            query = query.filter(PlayerStatsRaw.assists >= min_assists)
-            
-        if max_assists is not None:
-            query = query.filter(PlayerStatsRaw.assists <= max_assists)
+        pivot_sql = ",\n                    ".join(pivot_cases)
         
-        # Подсчитываем общее количество записей
-        total_count = query.count()
+        # Базовый запрос с динамическим PIVOT всех метрик
+        query_sql = f"""
+            WITH player_metrics AS (
+                SELECT 
+                    p.player_id,
+                    p.full_name,
+                    p.team_name,
+                    p.birth_year,
+                    p.height,
+                    p.weight,
+                    p.citizenship,
+                    pos.code as position_code,
+                    pos.group_code as position_group,
+                    pos.display_name as position_name,
+                    {pivot_sql}
+                FROM players p
+                JOIN positions pos ON p.position_id = pos.position_id
+                JOIN stat_slices ss ON ss.tournament_id = p.tournament_id
+                JOIN player_statistics ps ON ps.player_id = p.player_id AND ps.slice_id = ss.slice_id
+                WHERE ss.slice_type = :slice_type
+                  AND ss.period_type = 'SEASON'
+                  AND (:tournament_id IS NULL OR p.tournament_id = :tournament_id)
+                  AND (:position_group IS NULL OR pos.group_code = :position_group)
+                  AND (:search IS NULL OR 
+                       LOWER(p.full_name) LIKE LOWER(:search_pattern) OR 
+                       LOWER(p.team_name) LIKE LOWER(:search_pattern))
+                GROUP BY p.player_id, p.full_name, p.team_name, p.birth_year, p.height, p.weight, p.citizenship,
+                         pos.code, pos.group_code, pos.display_name
+            )
+            SELECT *,
+                COUNT(*) OVER() as total_count
+            FROM player_metrics
+            ORDER BY 
+                CASE WHEN :sort_field = 'full_name' THEN full_name END ASC,
+                CASE WHEN :sort_field = 'goals' THEN goals END DESC NULLS LAST,
+                CASE WHEN :sort_field = 'xg' THEN xg END DESC NULLS LAST,
+                CASE WHEN :sort_field = 'shots' THEN shots END DESC NULLS LAST,
+                CASE WHEN :sort_field = 'passes' THEN passes END DESC NULLS LAST,
+                full_name ASC
+            LIMIT :limit OFFSET :offset
+        """
         
-        # Применяем сортировку
-        # Проверяем что поле существует в модели
-        if hasattr(PlayerStatsRaw, sort_field):
-            sort_column = getattr(PlayerStatsRaw, sort_field)
-            if sort_order == "desc":
-                # NULL значения всегда в конце
-                query = query.order_by(sort_column.desc().nullslast())
-            else:
-                # NULL значения всегда в конце
-                query = query.order_by(sort_column.asc().nullslast())
-        else:
-            # Если поле не существует, сортируем по имени игрока
-            query = query.order_by(PlayerStatsRaw.player_name.asc().nullslast())
+        query = text(query_sql)
         
-        # Применяем пагинацию
-        players = query.offset((page - 1) * limit).limit(limit).all()
+        search_pattern = f"%{search}%" if search else None
+        offset = (page - 1) * limit
         
-        # Преобразуем в формат ответа
-        player_responses = []
-        for player in players:
-            player_responses.append(PlayerResponse(
-                id=str(player.id) if player.id else f"raw_{hash(player.player_name)}",
-                player_name=player.player_name or "Неизвестно",
-                team_name=player.team_name or "Неизвестно",
-                position=player.position or "N/A",
-                age=player.age,
-                player_number=player.player_number,
-                height=player.height,
-                weight=player.weight,
-                citizenship=player.citizenship,
-                player_index=player.player_index,
-                minutes_played=player.minutes_played or 0,
-                # Основная статистика
-                goals=player.goals or 0,
-                assists=player.assists or 0,
-                shots=player.shots or 0,
-                shots_on_target=player.shots_on_target or 0,
-                xg=player.xg,
-                # Голевые показатели
-                goal_attempts=player.goal_attempts or 0,
-                goal_attempts_successful=player.goal_attempts_successful or 0,
-                goal_attempts_success_rate=player.goal_attempts_success_rate,
-                goal_moments_created=player.goal_moments_created or 0,
-                goal_attacks_participation=player.goal_attacks_participation or 0,
-                goal_errors=player.goal_errors or 0,
-                rough_errors=player.rough_errors or 0,
-                fouls_committed=player.fouls_committed or 0,
-                fouls_suffered=player.fouls_suffered or 0,
-                # Передачи
-                passes_total=player.passes_total or 0,
-                passes_accuracy=player.passes_accuracy,
-                passes_key=player.passes_key or 0,
-                passes_key_accuracy=player.passes_key_accuracy,
-                crosses=player.crosses or 0,
-                crosses_accuracy=player.crosses_accuracy,
-                passes_progressive=player.passes_progressive or 0,
-                passes_progressive_accuracy=player.passes_progressive_accuracy,
-                passes_progressive_clean=player.passes_progressive_clean or 0,
-                passes_long=player.passes_long or 0,
-                passes_long_accuracy=player.passes_long_accuracy,
-                passes_super_long=player.passes_super_long or 0,
-                passes_super_long_accuracy=player.passes_super_long_accuracy,
-                passes_final_third=player.passes_final_third or 0,
-                passes_final_third_accuracy=player.passes_final_third_accuracy,
-                passes_penalty_area=player.passes_penalty_area or 0,
-                passes_penalty_area_accuracy=player.passes_penalty_area_accuracy,
-                passes_for_shot=player.passes_for_shot or 0,
-                # Единоборства
-                duels_total=player.duels_total or 0,
-                duels_success_rate=player.duels_success_rate,
-                duels_defensive=player.duels_defensive or 0,
-                duels_defensive_success_rate=player.duels_defensive_success_rate,
-                duels_offensive=player.duels_offensive or 0,
-                duels_offensive_success_rate=player.duels_offensive_success_rate,
-                duels_aerial=player.duels_aerial or 0,
-                duels_aerial_success_rate=player.duels_aerial_success_rate,
-                # Обводки
-                dribbles=player.dribbles or 0,
-                dribbles_success_rate=player.dribbles_success_rate,
-                dribbles_final_third=player.dribbles_final_third or 0,
-                dribbles_final_third_success_rate=player.dribbles_final_third_success_rate,
-                # Оборона
-                tackles=player.tackles or 0,
-                tackles_success_rate=player.tackles_success_rate,
-                interceptions=player.interceptions or 0,
-                recoveries=player.recoveries or 0,
-                # Дисциплина
-                yellow_cards=player.yellow_cards or 0,
-                red_cards=player.red_cards or 0,
-                # Метаданные
-                tracking_status=player.tracking_status,
-                tournament_id=player.tournament_id,
-                notes=player.notes,
-                created_at=player.created_at,
-                updated_at=player.updated_at
-            ))
+        result = db.execute(query, {
+            'slice_type': slice_type,
+            'tournament_id': tournament_id,
+            'position_group': position_group,
+            'search': search,
+            'search_pattern': search_pattern,
+            'sort_field': sort_field or 'goals',
+            'limit': limit,
+            'offset': offset
+        })
         
-        return PlayerListResponse(
-            data=player_responses,
-            total=total_count,
-            page=page,
-            limit=limit,
-            pages=((total_count - 1) // limit) + 1 if total_count > 0 else 0
-        )
+        rows = result.fetchall()
         
-    except Exception as e:
-        logger.error(f"Error retrieving database players: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve database players: {str(e)}")
-
-
-@router.get("/players/tracked", response_model=PlayerListResponse, summary="Получить отслеживаемых игроков")
-async def get_tracked_players(
-    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
-    page: int = Query(1, ge=1, description="Номер страницы"),
-    per_page: int = Query(50, ge=1, le=500, description="Количество на странице"),
-    db: Session = Depends(get_db)
-):
-    """
-    Получение списка всех отслеживаемых игроков (статус != 'non interesting').
-    """
-    try:
-        # Запрос отслеживаемых игроков
-        query = db.query(PlayerStatsRaw).filter(
-            PlayerStatsRaw.tracking_status != 'non interesting'
-        )
-        
-        if tournament_id is not None:
-            query = query.filter(PlayerStatsRaw.tournament_id == tournament_id)
-        
-        # Сортируем по статусу и имени
-        query = query.order_by(
-            PlayerStatsRaw.tracking_status.desc(),
-            PlayerStatsRaw.player_name.asc()
-        )
-        
-        # Подсчёт и пагинация
-        total_count = query.count()
-        offset = (page - 1) * per_page
-        players = query.offset(offset).limit(per_page).all()
-        
-        players_data = [PlayerResponse.from_orm(player) for player in players]
-        
-        logger.info(f"Retrieved {len(players)} tracked players (total: {total_count})")
-        
-        return PlayerListResponse(
-            data=players_data,
-            total=total_count,
-            page=page,
-            per_page=per_page,
-            message=f"Found {total_count} tracked players"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error retrieving tracked players: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve tracked players: {str(e)}")
-
-
-@router.get("/players/search", response_model=PlayerSearchResponse, summary="Поиск игроков")
-async def search_players(
-    query: str = Query(..., min_length=2, description="Поисковый запрос"),
-    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
-    limit: int = Query(20, ge=1, le=100, description="Максимум результатов"),
-    db: Session = Depends(get_db)
-):
-    """
-    Поиск игроков по имени с возможностью фильтрации по турниру.
-    Возвращает краткую информацию для выбора игрока.
-    """
-    try:
-        # Поиск по имени (нечёткий поиск)
-        search_query = db.query(PlayerStatsRaw).filter(
-            PlayerStatsRaw.player_name.ilike(f"%{query}%")
-        )
-        
-        if tournament_id is not None:
-            search_query = search_query.filter(PlayerStatsRaw.tournament_id == tournament_id)
-        
-        # Сортировка по релевантности (точные совпадения в начале)
-        search_query = search_query.order_by(
-            func.length(PlayerStatsRaw.player_name).asc(),
-            PlayerStatsRaw.player_name.asc()
-        ).limit(limit)
-        
-        players = search_query.all()
-        
-        # Формируем результаты поиска
-        results = []
-        for player in players:
-            basic_stats = {
-                "goals": player.goals or 0,
-                "assists": player.assists or 0,
-                "minutes_played": player.minutes_played or 0,
-                "position": player.position or "Unknown"
+        if not rows:
+            return {
+                'success': True,
+                'data': [],
+                'total': 0,
+                'page': page,
+                'per_page': limit,
+                'pages': 0,
+                'slice_type': slice_type,
+                'message': 'Нет данных'
             }
-            
-            result = PlayerSearchResult(
-                id=player.id,
-                player_name=player.player_name,
-                team_name=player.team_name,
-                position=player.position,
-                tournament_id=player.tournament_id,
-                current_status=TrackingStatus(player.tracking_status),
-                basic_stats=basic_stats
-            )
-            results.append(result)
         
-        logger.info(f"Search '{query}' found {len(results)} players")
+        # Формируем ответ с динамической обработкой всех колонок
+        total_count = rows[0][-1] if rows else 0
+        column_names = list(result.keys())
         
-        return PlayerSearchResponse(
-            query=query,
-            results=results,
-            total_found=len(results),
-            message=f"Found {len(results)} players matching '{query}'"
-        )
+        # Получаем типы данных метрик для правильной обработки процентов
+        metrics_types_query = db.execute(text("""
+            SELECT metric_code, data_type FROM metrics_catalog
+        """))
+        metrics_types = {row[0]: row[1] for row in metrics_types_query.fetchall()}
         
-    except Exception as e:
-        logger.error(f"Error searching players: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
-
-
-@router.get("/players/{player_id}", response_model=PlayerDetailResponse, summary="Получить игрока по ID")
-async def get_player(
-    player_id: UUID,
-    db: Session = Depends(get_db)
-):
-    """
-    Получение подробной информации об игроке по ID.
-    """
-    try:
-        player = db.query(PlayerStatsRaw).filter(PlayerStatsRaw.id == player_id).first()
-        
-        if not player:
-            raise HTTPException(status_code=404, detail="Player not found")
-        
-        player_data = PlayerResponse.from_orm(player)
-        
-        return PlayerDetailResponse(
-            data=player_data,
-            message="Player retrieved successfully"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error retrieving player {player_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve player: {str(e)}")
-
-
-@router.put("/players/{player_id}/status", response_model=PlayerStatusResponse, summary="Обновить статус игрока")
-async def update_player_status(
-    player_id: UUID,
-    status_update: PlayerStatusUpdate,
-    db: Session = Depends(get_db)
-):
-    """
-    Обновление статуса отслеживания игрока.
-    
-    Доступные статусы:
-    - **non interesting**: Обычный игрок (по умолчанию)
-    - **interesting**: Интересный игрок
-    - **to watch**: Игрок для наблюдения  
-    - **my player**: Мой игрок
-    """
-    try:
-        player = db.query(PlayerStatsRaw).filter(PlayerStatsRaw.id == player_id).first()
-        
-        if not player:
-            raise HTTPException(status_code=404, detail="Player not found")
-        
-        previous_status = player.tracking_status
-        player.tracking_status = status_update.tracking_status.value
-        
-        if status_update.notes:
-            player.notes = status_update.notes
-        
-        db.commit()
-        db.refresh(player)
-        
-        logger.info(f"Updated player {player_id} status: {previous_status} -> {status_update.tracking_status}")
-        
-        return PlayerStatusResponse(
-            player_id=player_id,
-            new_status=TrackingStatus(player.tracking_status),
-            previous_status=TrackingStatus(previous_status),
-            message="Player status updated successfully"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating player {player_id} status: {e}")
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update player status: {str(e)}")
-
-
-@router.get("/tournaments/{tournament_id}/players", response_model=PlayerListResponse, summary="Игроки турнира")
-async def get_tournament_players(
-    tournament_id: int = Path(..., ge=0, le=3, description="ID турнира"),
-    sort_field: str = Query("player_name", description="Поле для сортировки"),
-    sort_order: str = Query("asc", pattern="^(asc|desc)$", description="Порядок сортировки"),
-    page: int = Query(1, ge=1, description="Номер страницы"),
-    per_page: int = Query(100, ge=1, le=500, description="Количество на странице"),
-    db: Session = Depends(get_db)
-):
-    """
-    Получение всех игроков конкретного турнира с сортировкой.
-    Основной endpoint для страницы турнира.
-    """
-    try:
-        # Проверяем корректность tournament_id
-        if tournament_id not in [0, 1, 2, 3]:
-            raise HTTPException(status_code=400, detail="Invalid tournament ID")
-        
-        # Запрос игроков турнира
-        query = db.query(PlayerStatsRaw).filter(PlayerStatsRaw.tournament_id == tournament_id)
-        
-        # Подсчёт общего количества
-        total_count = query.count()
-        
-        # Применяем сортировку
-        allowed_sort_fields = [
-            'player_name', 'team_name', 'position', 'goals', 'assists',
-            'shots', 'passes_total', 'minutes_played', 'tackles', 'interceptions'
-        ]
-        
-        if sort_field not in allowed_sort_fields:
-            sort_field = 'player_name'
-        
-        sort_column = getattr(PlayerStatsRaw, sort_field)
-        if sort_order == "desc":
-            query = query.order_by(sort_column.desc())
-        else:
-            query = query.order_by(sort_column.asc())
-        
-        # Пагинация
-        offset = (page - 1) * per_page
-        players = query.offset(offset).limit(per_page).all()
-        
-        players_data = [PlayerResponse.from_orm(player) for player in players]
-        
-        tournament_name = settings.get_tournament_name(tournament_id)
-        logger.info(f"Retrieved {len(players)} players from {tournament_name} (total: {total_count})")
-        
-        return PlayerListResponse(
-            data=players_data,
-            total=total_count,
-            page=page,
-            per_page=per_page,
-            message=f"Tournament {tournament_name}: {total_count} players"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error retrieving tournament {tournament_id} players: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve tournament players: {str(e)}")
-
-
-@router.get("/last-round/players", response_model=PlayerListResponse, summary="Игроки последнего тура")
-async def get_last_round_players(
-    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
-    tracking_status: Optional[TrackingStatus] = Query(None, description="Статус отслеживания"),
-    page: int = Query(1, ge=1, description="Номер страницы"),
-    per_page: int = Query(50, ge=1, le=500, description="Количество на странице"),
-    db: Session = Depends(get_db)
-):
-    """
-    Получение данных игроков из последнего загруженного тура.
-    Показывает актуальную статистику после последней загрузки Excel.
-    """
-    try:
-        # Запрос из таблицы последнего тура
-        query = db.query(LastRoundStats)
-        
-        if tournament_id is not None:
-            query = query.filter(LastRoundStats.tournament_id == tournament_id)
-        
-        if tracking_status:
-            query = query.filter(LastRoundStats.tracking_status == tracking_status.value)
-        
-        # Сортировка по голам (самые результативные в начале)
-        query = query.order_by(LastRoundStats.goals.desc(), LastRoundStats.assists.desc())
-        
-        total_count = query.count()
-        offset = (page - 1) * per_page
-        players = query.offset(offset).limit(per_page).all()
-        
-        # Преобразуем LastRoundStats в PlayerResponse format
         players_data = []
-        for player in players:
-            # Создаём объект похожий на PlayerResponse для совместимости
-            player_response = {
-                "id": player.id,
-                "player_name": player.player_name,
-                "team_name": player.team_name,
-                "position": player.position,
-                "age": player.age,
-                "minutes_played": player.minutes_played,
-                "tournament_id": player.tournament_id,
-                "tracking_status": player.tracking_status,
-                "goals": player.goals,
-                "assists": player.assists,
-                "shots": player.shots,
-                "shots_on_target": player.shots_on_target,
-                "passes_total": player.passes_total,
-                "passes_accuracy": player.passes_accuracy,
-                "yellow_cards": player.yellow_cards,
-                "red_cards": player.red_cards,
-                "xg": player.xg,
-                "created_at": player.created_at,
-                "updated_at": player.updated_at
-            }
-            players_data.append(player_response)
+        for row in rows:
+            player_dict = {}
+            for idx, col_name in enumerate(column_names):
+                if col_name == 'total_count':
+                    continue  # Пропускаем служебную колонку
+                
+                value = row[idx]
+                
+                # Конвертируем проценты (если это процент, умножаем на 100)
+                if col_name in metrics_types and metrics_types[col_name] == 'PERCENTAGE' and value is not None:
+                    value = float(value) * 100
+                elif value is not None and isinstance(value, (int, float)):
+                    value = float(value)
+                
+                player_dict[col_name] = value
+            
+            players_data.append(player_dict)
         
-        logger.info(f"Retrieved {len(players)} last round players (total: {total_count})")
+        total_pages = (total_count + limit - 1) // limit
         
-        return PlayerListResponse(
-            data=players_data,
-            total=total_count,
-            page=page,
-            per_page=per_page,
-            message=f"Last round: {total_count} players"
-        )
+        return {
+            'success': True,
+            'data': players_data,
+            'total': total_count,
+            'page': page,
+            'per_page': limit,
+            'pages': total_pages,
+            'slice_type': slice_type,
+            'message': f'Найдено {total_count} игроков ({slice_type})'
+        }
         
     except Exception as e:
-        logger.error(f"Error retrieving last round players: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve last round players: {str(e)}")
+        logger.error(f"Error getting players: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/database/clear-all", summary="Очистить все таблицы")
-async def clear_all_tables(
-    confirm: bool = Query(False, description="Подтверждение очистки (должно быть true)"),
-    db: Session = Depends(get_db)
-):
-    """
-    **ОПАСНАЯ ОПЕРАЦИЯ**: Очистка всех таблиц с данными игроков.
-    
-    Удаляет все записи из:
-    - players_stats_raw
-    - last_round_stats
-    - position_averages
-    
-    Требует явного подтверждения через параметр confirm=true.
-    """
+@router.get("/tournaments/info")
+async def get_tournaments_info(db: Session = Depends(get_db)):
+    """Информация о турнирах."""
     try:
-        if not confirm:
-            raise HTTPException(
-                status_code=400, 
-                detail="Требуется подтверждение. Добавьте ?confirm=true для очистки всех таблиц"
-            )
+        result = db.execute(text("""
+            SELECT 
+                t.id,
+                t.name,
+                t.full_name,
+                t.short_code as code,
+                COALESCE(t.current_round, 0) as current_round,
+                t.updated_at as last_update,
+                COUNT(DISTINCT p.player_id) as players_count
+            FROM tournaments t
+            LEFT JOIN players p ON p.tournament_id = t.id
+            GROUP BY t.id, t.name, t.full_name, t.short_code, t.current_round, t.updated_at
+            ORDER BY t.id
+        """))
         
-        # Подсчитываем записи перед удалением
-        players_count = db.query(func.count(PlayerStatsRaw.id)).scalar() or 0
-        last_round_count = db.query(func.count(LastRoundStats.id)).scalar() or 0
-        
-        # Удаляем все записи
-        deleted_players = db.query(PlayerStatsRaw).delete(synchronize_session=False)
-        deleted_last_round = db.query(LastRoundStats).delete(synchronize_session=False)
-        
-        # Фиксируем изменения
-        db.commit()
-        
-        logger.warning(f"CLEARED ALL TABLES: {deleted_players} players, {deleted_last_round} last_round records")
+        tournaments = []
+        for row in result:
+            tournaments.append({
+                "id": row[0],
+                "name": row[1],
+                "full_name": row[2],
+                "code": row[3],
+                "current_round": row[4],
+                "last_update": row[5].isoformat() if row[5] else None,
+                "players_count": row[6] or 0
+            })
         
         return {
             "success": True,
-            "message": "Все таблицы успешно очищены",
-            "deleted": {
-                "players_stats_raw": deleted_players,
-                "last_round_stats": deleted_last_round
-            }
+            "data": tournaments,
+            "total": len(tournaments)
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
+        logger.error(f"Error getting tournaments: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload/tournament")
+async def upload_tournament_file(
+    file: UploadFile = File(...),
+    tournament_id: int = Form(...),
+    slice_type: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Загрузить файл для турнира.
+    
+    При загрузке:
+    - Существующие игроки обновляются (по имени, году рождения, команде, турниру)
+    - Новые игроки добавляются
+    """
+    try:
+        # Проверка типа файла
+        if not file.filename.endswith(('.xlsx', '.xls')):
+            raise HTTPException(status_code=400, detail="Поддерживаются только файлы .xlsx и .xls")
+        
+        # Сохранение файла
+        upload_dir = Path("/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = upload_dir / f"{timestamp}_{tournament_id}_{slice_type}_{file.filename}"
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        logger.info(f"File saved: {file_path}")
+        
+        # Загрузка в БД
+        loader = DataLoader(db)
+        
+        result = loader.load_file(
+            file_path=file_path,
+            tournament_id=tournament_id,
+            slice_type=slice_type,
+            period_type='SEASON',
+            period_value='1-15'  # TODO: Получать из параметров
+        )
+        
+        # Обновляем дату обновления турнира
+        db.execute(text("""
+            UPDATE tournaments 
+            SET updated_at = CURRENT_TIMESTAMP 
+            WHERE id = :tid
+        """), {"tid": tournament_id})
+        db.commit()
+        
+        logger.info(f"✅ Loaded {result['players_loaded']} players, {result['stats_loaded']} stats")
+        
+        return {
+            "success": True,
+            "message": f"Загружено {result['players_loaded']} игроков, {result['stats_loaded']} статистик",
+            "players_loaded": result['players_loaded'],
+            "stats_loaded": result['stats_loaded']
+        }
+        
+    except Exception as e:
+        logger.error(f"Error uploading file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/database/clear")
+async def clear_database(db: Session = Depends(get_db)):
+    """
+    Очистить базу данных (игроков и статистику).
+    Турниры и справочники остаются.
+    """
+    try:
+        # Очищаем таблицы
+        db.execute(text("TRUNCATE TABLE player_statistics CASCADE"))
+        db.execute(text("TRUNCATE TABLE stat_slices CASCADE"))
+        db.execute(text("TRUNCATE TABLE players CASCADE"))
+        db.commit()
+        
+        logger.info("✅ Database cleared successfully")
+        
+        return {
+            "success": True,
+            "message": "База данных очищена успешно"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error clearing database: {e}")
         db.rollback()
-        logger.error(f"Error clearing tables: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка очистки таблиц: {str(e)}")
-
-
+        raise HTTPException(status_code=500, detail=str(e))

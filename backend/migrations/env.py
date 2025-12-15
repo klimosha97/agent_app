@@ -19,7 +19,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 # Импортируем настройки и модели
 from app.config import settings
 from app.models.base import Base
-from app.models.player import PlayerStatsRaw, PositionAverages, LastRoundStats
+# ЗАГЛУШКА: модели игроков будут добавлены после создания таблиц
+# from app.models.player import PlayerSeasonStats, PlayerRoundStats
 
 # Настройка Alembic Config object
 config = context.config
