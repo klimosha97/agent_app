@@ -2,7 +2,7 @@
  * Главный компонент приложения
  */
 
-import React, { useState } from 'react';
+import React, { useState, createContext, useContext } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { ReactQueryDevtools } from 'react-query/devtools';
 
@@ -13,11 +13,25 @@ import { Tournaments } from './pages/Tournaments';
 import { TrackedPlayers } from './pages/TrackedPlayers';
 import { TopPerformers } from './pages/TopPerformers';
 import { Database } from './pages/Database';
+import { PlayerProfile } from './pages/PlayerProfile';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppHeader } from './components/AppHeader';
 
 // Стили
 import './index.css';
+
+// Контекст для навигации к игроку
+interface PlayerNavigationContextType {
+  selectedPlayerId: number | null;
+  setSelectedPlayerId: (id: number | null) => void;
+}
+
+const PlayerNavigationContext = createContext<PlayerNavigationContextType>({
+  selectedPlayerId: null,
+  setSelectedPlayerId: () => {},
+});
+
+export const usePlayerNavigation = () => useContext(PlayerNavigationContext);
 
 // Создаём клиент для React Query
 const queryClient = new QueryClient({
@@ -96,55 +110,76 @@ const tabs: Tab[] = [
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('my-players');
+  const [activeTab, setActiveTab] = useState<TabId>('database');
+  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
 
   // Находим активную вкладку
   const currentTab = tabs.find((tab) => tab.id === activeTab);
   const CurrentTabComponent = currentTab?.component || MyPlayers;
 
+  // При смене вкладки сбрасываем выбранного игрока
+  const handleTabChange = (tabId: TabId) => {
+    setSelectedPlayerId(null);
+    setActiveTab(tabId);
+  };
+
+  // Обработчик возврата со страницы игрока
+  const handleBackFromPlayer = () => {
+    setSelectedPlayerId(null);
+  };
+
   return (
     <QueryClientProvider client={queryClient}>
-      <ErrorBoundary>
-        <div className="min-h-screen bg-gray-50">
-          {/* Заголовок приложения */}
-          <AppHeader />
+      <PlayerNavigationContext.Provider value={{ selectedPlayerId, setSelectedPlayerId }}>
+        <ErrorBoundary>
+          <div className="min-h-screen bg-gray-50">
+            {/* Заголовок приложения */}
+            <AppHeader />
 
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            {/* Навигация по вкладкам */}
-            <Navigation
-              tabs={tabs}
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
-            />
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              {/* Навигация по вкладкам */}
+              <Navigation
+                tabs={tabs}
+                activeTab={activeTab}
+                onTabChange={handleTabChange}
+              />
 
-            {/* Основной контент */}
-            <main className="py-6">
-              <div className="animate-fade-in">
-                <CurrentTabComponent />
-              </div>
-            </main>
-          </div>
-
-          {/* Футер */}
-          <footer className="bg-white border-t border-gray-200 mt-12">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-              <div className="text-center text-sm text-gray-500">
-                <p>
-                  Приложение для анализа статистики футболистов v1.0.0
-                </p>
-                <p className="mt-1">
-                  Создано с ❤️ для анализа футбольных данных
-                </p>
-              </div>
+              {/* Основной контент */}
+              <main className="py-6">
+                <div className="animate-fade-in">
+                  {selectedPlayerId !== null ? (
+                    <PlayerProfile 
+                      playerId={selectedPlayerId} 
+                      onBack={handleBackFromPlayer} 
+                    />
+                  ) : (
+                    <CurrentTabComponent />
+                  )}
+                </div>
+              </main>
             </div>
-          </footer>
-        </div>
-      </ErrorBoundary>
 
-      {/* React Query DevTools (только в dev режиме) */}
-      {process.env.NODE_ENV === 'development' && (
-        <ReactQueryDevtools initialIsOpen={false} />
-      )}
+            {/* Футер */}
+            <footer className="bg-white border-t border-gray-200 mt-12">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+                <div className="text-center text-sm text-gray-500">
+                  <p>
+                    Приложение для анализа статистики футболистов v1.0.0
+                  </p>
+                  <p className="mt-1">
+                    Создано для анализа футбольных данных
+                  </p>
+                </div>
+              </div>
+            </footer>
+          </div>
+        </ErrorBoundary>
+
+        {/* React Query DevTools (только в dev режиме) */}
+        {process.env.NODE_ENV === 'development' && (
+          <ReactQueryDevtools initialIsOpen={false} />
+        )}
+      </PlayerNavigationContext.Provider>
     </QueryClientProvider>
   );
 }

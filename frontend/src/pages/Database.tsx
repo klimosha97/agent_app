@@ -6,6 +6,7 @@
  * - Заморозки колонок Игрок/Команда при горизонтальном скролле
  * - Настройки видимых колонок
  * - Все параметры из Excel файла
+ * - Клик на игрока для перехода на страницу профиля
  */
 
 import React, { useState, useEffect } from 'react';
@@ -14,6 +15,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card'
 import { apiService } from '../services/api';
 import { MagnifyingGlassIcon, ChevronUpIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 import { TableColumnsSettings } from '../components/TableColumnsSettings';
+import { usePlayerNavigation } from '../App';
 
 type SliceType = 'TOTAL' | 'PER90';
 
@@ -173,6 +175,8 @@ const DEFAULT_VISIBLE_COLUMNS = [
 ];
 
 export const Database: React.FC = () => {
+  const { setSelectedPlayerId } = usePlayerNavigation();
+  
   const [sliceType, setSliceType] = useState<SliceType>('TOTAL');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -461,11 +465,12 @@ export const Database: React.FC = () => {
                       return (
                       <tr 
                         key={player.player_id} 
-                        className={`hover:bg-blue-50 transition-colors ${rowBg}`}
+                        onClick={() => setSelectedPlayerId(player.player_id)}
+                        className={`hover:bg-blue-50 transition-colors cursor-pointer ${rowBg}`}
                       >
                         {/* Замороженные ячейки - Игрок, Команда, Поз с непрозрачным фоном и тенью */}
                         <td 
-                          className={`px-3 py-2 text-sm font-medium text-gray-900 sticky left-0 z-10 min-w-[180px] whitespace-nowrap ${rowBg}`}
+                          className={`px-3 py-2 text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline sticky left-0 z-10 min-w-[180px] whitespace-nowrap ${rowBg}`}
                           style={{ boxShadow: 'none' }}
                         >
                           {player.full_name}

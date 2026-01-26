@@ -375,6 +375,87 @@ class ApiService {
     return response.data;
   }
 
+  // === Методы для страницы игрока ===
+
+  /**
+   * Получить базовую информацию об игроке
+   */
+  async getPlayerInfo(playerId: number): Promise<{
+    success: boolean;
+    data: {
+      player_id: number;
+      full_name: string;
+      birth_year: number | null;
+      team_name: string;
+      height: number | null;
+      weight: number | null;
+      citizenship: string | null;
+      tournament_id: number;
+      position_code: string;
+      position_group: string;
+      position_name: string;
+      tournament_name: string;
+      tournament_full_name: string;
+      current_round: number | null;
+    };
+  }> {
+    const response = await this.api.get(`/players/${playerId}`);
+    return response.data;
+  }
+
+  /**
+   * Получить статистику игрока для конкретного слайса
+   */
+  async getPlayerStats(
+    playerId: number,
+    sliceType: 'TOTAL' | 'PER90' = 'TOTAL',
+    periodType: 'SEASON' | 'ROUND' = 'SEASON',
+    roundNumber?: number
+  ): Promise<{
+    success: boolean;
+    player_id: number;
+    slice_type: string;
+    period_type: string;
+    round_number: number | null;
+    stats: Record<string, number | null>;
+    stats_detailed: Array<{
+      code: string;
+      value: number | null;
+      display_name: string;
+      data_type: string;
+      category: string;
+      is_key_metric: boolean;
+    }>;
+    total_metrics: number;
+    message: string;
+  }> {
+    const params = new URLSearchParams();
+    params.append('slice_type', sliceType);
+    params.append('period_type', periodType);
+    if (periodType === 'ROUND' && roundNumber !== undefined) {
+      params.append('round_number', roundNumber.toString());
+    }
+    const response = await this.api.get(`/players/${playerId}/stats?${params}`);
+    return response.data;
+  }
+
+  /**
+   * Получить список доступных слайсов для игрока
+   */
+  async getPlayerAvailableSlices(playerId: number): Promise<{
+    success: boolean;
+    player_id: number;
+    tournament_id: number;
+    slices: {
+      season: { TOTAL: boolean; PER90: boolean };
+      rounds: number[];
+    };
+    message: string;
+  }> {
+    const response = await this.api.get(`/players/${playerId}/available-slices`);
+    return response.data;
+  }
+
   // === Служебные методы ===
 
   async checkHealth(): Promise<any> {

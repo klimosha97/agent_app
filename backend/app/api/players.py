@@ -373,3 +373,254 @@ async def clear_database(db: Session = Depends(get_db)):
         logger.error(f"Error clearing database: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# ЭНДПОИНТЫ ДЛЯ СТРАНИЦЫ ИГРОКА
+# ============================================
+
+@router.get("/players/{player_id}")
+async def get_player_info(
+    player_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Получить базовую информацию об игроке.
+    """
+    try:
+        result = db.execute(text("""
+            SELECT 
+                p.player_id,
+                p.full_name,
+                p.birth_year,
+                p.team_name,
+                p.height,
+                p.weight,
+                p.citizenship,
+                p.tournament_id,
+                pos.code as position_code,
+                pos.group_code as position_group,
+                pos.display_name as position_name,
+                t.name as tournament_name,
+                t.full_name as tournament_full_name,
+                t.current_round
+            FROM players p
+            JOIN positions pos ON p.position_id = pos.position_id
+            JOIN tournaments t ON p.tournament_id = t.id
+            WHERE p.player_id = :player_id
+        """), {'player_id': player_id})
+        
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Игрок не найден")
+        
+        return {
+            'success': True,
+            'data': {
+                'player_id': row[0],
+                'full_name': row[1],
+                'birth_year': row[2],
+                'team_name': row[3],
+                'height': row[4],
+                'weight': row[5],
+                'citizenship': row[6],
+                'tournament_id': row[7],
+                'position_code': row[8],
+                'position_group': row[9],
+                'position_name': row[10],
+                'tournament_name': row[11],
+                'tournament_full_name': row[12],
+                'current_round': row[13]
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting player info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/players/{player_id}/stats")
+async def get_player_stats(
+    player_id: int,
+    slice_type: str = Query("TOTAL", description="Тип статистики: TOTAL или PER90"),
+    period_type: str = Query("SEASON", description="Тип периода: SEASON или ROUND"),
+    round_number: Optional[int] = Query(None, ge=1, le=50, description="Номер тура (для period_type=ROUND)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Получить статистику игрока для конкретного слайса.
+    Возвращает все метрики в формате {metric_code: value, ...}
+    """
+    try:
+        # Сначала получаем tournament_id игрока
+        player_result = db.execute(text("""
+            SELECT tournament_id FROM players WHERE player_id = :player_id
+        """), {'player_id': player_id})
+        player_row = player_result.fetchone()
+        
+        if not player_row:
+            raise HTTPException(status_code=404, detail="Игрок не найден")
+        
+        tournament_id = player_row[0]
+        
+        # Формируем условие для period_value
+        period_value_condition = ""
+        params = {
+            'player_id': player_id,
+            'tournament_id': tournament_id,
+            'slice_type': slice_type,
+            'period_type': period_type
+        }
+        
+        if period_type == 'ROUND' and round_number:
+            period_value_condition = "AND ss.period_value = :period_value"
+            params['period_value'] = str(round_number)
+        
+        # Получаем статистику игрока
+        result = db.execute(text(f"""
+            SELECT 
+                ps.metric_code,
+                ps.metric_value,
+                mc.display_name_ru,
+                mc.data_type,
+                mc.category,
+                mc.is_key_metric
+            FROM player_statistics ps
+            JOIN stat_slices ss ON ps.slice_id = ss.slice_id
+            JOIN metrics_catalog mc ON ps.metric_code = mc.metric_code
+            WHERE ps.player_id = :player_id
+              AND ss.tournament_id = :tournament_id
+              AND ss.slice_type = :slice_type
+              AND ss.period_type = :period_type
+              {period_value_condition}
+            ORDER BY mc.category, mc.metric_code
+        """), params)
+        
+        rows = result.fetchall()
+        
+        # Формируем ответ
+        stats = {}
+        stats_detailed = []
+        
+        for row in rows:
+            metric_code = row[0]
+            value = row[1]
+            display_name = row[2]
+            data_type = row[3]
+            category = row[4]
+            is_key = row[5]
+            
+            # Конвертируем проценты если нужно
+            if data_type == 'PERCENTAGE' and value is not None:
+                value = float(value) * 100
+            elif value is not None:
+                value = float(value)
+            
+            stats[metric_code] = value
+            stats_detailed.append({
+                'code': metric_code,
+                'value': value,
+                'display_name': display_name,
+                'data_type': data_type,
+                'category': category,
+                'is_key_metric': is_key
+            })
+        
+        period_info = f"Тур {round_number}" if period_type == 'ROUND' and round_number else "Сезон"
+        
+        return {
+            'success': True,
+            'player_id': player_id,
+            'slice_type': slice_type,
+            'period_type': period_type,
+            'round_number': round_number if period_type == 'ROUND' else None,
+            'stats': stats,
+            'stats_detailed': stats_detailed,
+            'total_metrics': len(stats),
+            'message': f'Статистика игрока ({slice_type}, {period_info})'
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting player stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/players/{player_id}/available-slices")
+async def get_player_available_slices(
+    player_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Получить список доступных слайсов (сезонов/туров) для игрока.
+    Полезно для UI, чтобы показать какие данные доступны.
+    """
+    try:
+        # Получаем tournament_id игрока
+        player_result = db.execute(text("""
+            SELECT tournament_id FROM players WHERE player_id = :player_id
+        """), {'player_id': player_id})
+        player_row = player_result.fetchone()
+        
+        if not player_row:
+            raise HTTPException(status_code=404, detail="Игрок не найден")
+        
+        tournament_id = player_row[0]
+        
+        # Получаем все слайсы где есть данные этого игрока
+        result = db.execute(text("""
+            SELECT DISTINCT
+                ss.slice_type,
+                ss.period_type,
+                ss.period_value,
+                ss.uploaded_at
+            FROM player_statistics ps
+            JOIN stat_slices ss ON ps.slice_id = ss.slice_id
+            WHERE ps.player_id = :player_id
+              AND ss.tournament_id = :tournament_id
+            ORDER BY ss.period_type, ss.slice_type, ss.period_value
+        """), {'player_id': player_id, 'tournament_id': tournament_id})
+        
+        rows = result.fetchall()
+        
+        slices = {
+            'season': {'TOTAL': False, 'PER90': False},
+            'rounds': []
+        }
+        
+        rounds_set = set()
+        
+        for row in rows:
+            slice_type = row[0]
+            period_type = row[1]
+            period_value = row[2]
+            
+            if period_type == 'SEASON':
+                slices['season'][slice_type] = True
+            elif period_type == 'ROUND':
+                try:
+                    round_num = int(period_value)
+                    if round_num not in rounds_set:
+                        rounds_set.add(round_num)
+                except:
+                    pass
+        
+        slices['rounds'] = sorted(list(rounds_set), reverse=True)
+        
+        return {
+            'success': True,
+            'player_id': player_id,
+            'tournament_id': tournament_id,
+            'slices': slices,
+            'message': f'Доступно: сезон={slices["season"]}, туров={len(slices["rounds"])}'
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting player available slices: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

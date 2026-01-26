@@ -1,6 +1,7 @@
 /**
  * Страница "Турниры"
  * Показывает список турниров и детальную статистику игроков
+ * Клик на игрока открывает страницу профиля
  */
 
 import React, { useState, useEffect } from 'react';
@@ -35,6 +36,7 @@ import { TableColumnsSettings } from '../components/TableColumnsSettings';
 import { apiService } from '../services/api';
 import { useQueryClient } from 'react-query';
 import { FlagIcon } from '@heroicons/react/24/solid';
+import { usePlayerNavigation } from '../App';
 
 // Определение колонок для таблицы игроков турнира
 interface ColumnDef {
@@ -228,6 +230,8 @@ const TOURNAMENT_TILES = [
 ];
 
 export const Tournaments: React.FC = () => {
+  const { setSelectedPlayerId } = usePlayerNavigation();
+  
   const [selectedTournamentId, setSelectedTournamentId] = useState<number | null>(null);
   const [selectedSection, setSelectedSection] = useState<TournamentSection>('overview');
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
@@ -701,8 +705,12 @@ export const Tournaments: React.FC = () => {
                       players.map((player: any, rowIdx: number) => {
                         const rowBg = rowIdx % 2 === 0 ? 'bg-white' : 'bg-[#f9fafb]';
                         return (
-                          <tr key={player.player_id} className={`hover:bg-blue-50 transition-colors ${rowBg}`}>
-                            <td className={`px-3 py-2 text-sm font-medium text-gray-900 sticky left-0 z-10 min-w-[180px] whitespace-nowrap ${rowBg}`}>
+                          <tr 
+                            key={player.player_id} 
+                            onClick={() => setSelectedPlayerId(player.player_id)}
+                            className={`hover:bg-blue-50 transition-colors cursor-pointer ${rowBg}`}
+                          >
+                            <td className={`px-3 py-2 text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline sticky left-0 z-10 min-w-[180px] whitespace-nowrap ${rowBg}`}>
                               {player.full_name}
                             </td>
                             <td className={`px-3 py-2 text-sm text-gray-600 sticky left-[180px] z-10 min-w-[140px] whitespace-nowrap ${rowBg}`}>
@@ -1043,8 +1051,12 @@ export const Tournaments: React.FC = () => {
                       players.map((player: any, rowIdx: number) => {
                         const rowBg = rowIdx % 2 === 0 ? 'bg-white' : 'bg-yellow-50/30';
                         return (
-                          <tr key={player.player_id} className={`hover:bg-yellow-50 transition-colors ${rowBg}`}>
-                            <td className={`px-3 py-2 text-sm font-medium text-gray-900 sticky left-0 z-10 min-w-[180px] whitespace-nowrap ${rowBg}`}>
+                          <tr 
+                            key={player.player_id} 
+                            onClick={() => setSelectedPlayerId(player.player_id)}
+                            className={`hover:bg-yellow-50 transition-colors cursor-pointer ${rowBg}`}
+                          >
+                            <td className={`px-3 py-2 text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline sticky left-0 z-10 min-w-[180px] whitespace-nowrap ${rowBg}`}>
                               {player.full_name}
                             </td>
                             <td className={`px-3 py-2 text-sm text-gray-600 sticky left-[180px] z-10 min-w-[140px] whitespace-nowrap ${rowBg}`}>
