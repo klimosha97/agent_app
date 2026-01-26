@@ -25,7 +25,7 @@ interface RoundUploadModalProps {
 }
 
 interface FileSlot {
-  id: 'total' | 'per90';
+  id: 'total';
   label: string;
   description: string;
   file: File | null;
@@ -76,15 +76,8 @@ export const RoundUploadModal: React.FC<RoundUploadModalProps> = ({
   const [slots, setSlots] = useState<FileSlot[]>([
     {
       id: 'total',
-      label: 'Всего за тур',
-      description: 'Суммарная статистика за тур (mfl_30tur.xlsx)',
-      file: null,
-      status: 'pending'
-    },
-    {
-      id: 'per90',
-      label: 'За 90 минут (тур)',
-      description: 'Средняя статистика за тур (mfl_30tur_average90min.xlsx)',
+      label: 'Статистика за тур',
+      description: 'Файл статистики за тур (например: mfl_15.xlsx)',
       file: null,
       status: 'pending'
     }
@@ -107,11 +100,10 @@ export const RoundUploadModal: React.FC<RoundUploadModalProps> = ({
     }
   }, [isOpen, tournamentId, currentYear]);
 
-  // Проверяем, выбраны ли оба файла
-  const allFilesSelected = slots.every(slot => slot.file !== null);
-  const missingFiles = slots.filter(slot => !slot.file).map(s => s.label);
+  // Проверяем, выбран ли файл
+  const fileSelected = slots[0].file !== null;
 
-  const handleFileSelect = (slotId: 'total' | 'per90', file: File | null) => {
+  const handleFileSelect = (slotId: 'total', file: File | null) => {
     setSlots(prev => prev.map(slot =>
       slot.id === slotId
         ? { ...slot, file, status: 'pending', message: undefined }
@@ -120,40 +112,40 @@ export const RoundUploadModal: React.FC<RoundUploadModalProps> = ({
   };
 
   const handleUpload = async () => {
-    if (!allFilesSelected) {
-      window.alert(`Необходимо выбрать ОБА файла!\n\nНе выбраны:\n${missingFiles.map(f => '• ' + f).join('\n')}`);
+    if (!fileSelected) {
+      window.alert('Необходимо выбрать файл!');
       return;
     }
 
     setIsUploading(true);
     let hasErrors = false;
 
-    for (const slot of slots) {
-      // Устанавливаем статус загрузки
+    const slot = slots[0];
+    
+    // Устанавливаем статус загрузки
+    setSlots(prev => prev.map(s =>
+      s.id === slot.id ? { ...s, status: 'uploading' } : s
+    ));
+
+    try {
+      await apiService.uploadRoundFile(
+        slot.file!,
+        tournamentId,
+        'TOTAL',
+        round,
+        String(season)
+      );
+
       setSlots(prev => prev.map(s =>
-        s.id === slot.id ? { ...s, status: 'uploading' } : s
+        s.id === slot.id ? { ...s, status: 'success', message: 'Успешно загружено' } : s
       ));
-
-      try {
-        await apiService.uploadRoundFile(
-          slot.file!,
-          tournamentId,
-          slot.id === 'total' ? 'TOTAL' : 'PER90',
-          round,
-          String(season)
-        );
-
-        setSlots(prev => prev.map(s =>
-          s.id === slot.id ? { ...s, status: 'success', message: 'Успешно загружено' } : s
-        ));
-      } catch (error: any) {
-        hasErrors = true;
-        setSlots(prev => prev.map(s =>
-          s.id === slot.id
-            ? { ...s, status: 'error', message: error.response?.data?.detail || error.message }
-            : s
-        ));
-      }
+    } catch (error: any) {
+      hasErrors = true;
+      setSlots(prev => prev.map(s =>
+        s.id === slot.id
+          ? { ...s, status: 'error', message: error.response?.data?.detail || error.message }
+          : s
+      ));
     }
 
     setIsUploading(false);
@@ -181,15 +173,8 @@ export const RoundUploadModal: React.FC<RoundUploadModalProps> = ({
       setSlots([
         {
           id: 'total',
-          label: 'Всего за тур',
-          description: 'Суммарная статистика за тур (mfl_30tur.xlsx)',
-          file: null,
-          status: 'pending'
-        },
-        {
-          id: 'per90',
-          label: 'За 90 минут (тур)',
-          description: 'Средняя статистика за тур (mfl_30tur_average90min.xlsx)',
+          label: 'Статистика за тур',
+          description: 'Файл статистики за тур (например: mfl_15.xlsx)',
           file: null,
           status: 'pending'
         }
@@ -330,11 +315,11 @@ export const RoundUploadModal: React.FC<RoundUploadModalProps> = ({
               </div>
             </div>
 
-            {/* Слоты для файлов */}
+            {/* Слот для файла */}
             <div className="space-y-3">
               <h3 className="text-sm font-medium text-gray-700 flex items-center">
                 <DocumentArrowUpIcon className="w-5 h-5 mr-2" />
-                Выберите файлы для загрузки
+                Выберите файл для загрузки
               </h3>
               
               {slots.map((slot) => (
@@ -423,11 +408,11 @@ export const RoundUploadModal: React.FC<RoundUploadModalProps> = ({
 
           {/* Footer */}
           <div className="p-6 border-t border-gray-200 bg-gray-50">
-            {!allFilesSelected && !isUploading && (
+            {!fileSelected && !isUploading && (
               <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <p className="text-amber-800 text-sm flex items-center">
                   <ExclamationCircleIcon className="w-6 h-6 mr-2 flex-shrink-0" />
-                  Для загрузки необходимо выбрать оба файла
+                  Для загрузки необходимо выбрать файл
                 </p>
               </div>
             )}
@@ -441,7 +426,7 @@ export const RoundUploadModal: React.FC<RoundUploadModalProps> = ({
               </button>
               <button
                 onClick={handleUpload}
-                disabled={isUploading || !allFilesSelected}
+                disabled={isUploading || !fileSelected}
                 className="px-7 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center text-base font-medium"
               >
                 {isUploading ? (

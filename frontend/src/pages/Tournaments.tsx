@@ -1283,20 +1283,22 @@ export const Tournaments: React.FC = () => {
   // ОСНОВНОЙ РЕНДЕР
   // ========================================
   
-  if (selectedTournament) {
-    if (selectedSection === 'overview') {
-      return renderTournamentOverview();
-    } else if (selectedSection === 'all_players') {
-      return renderAllPlayersSection();
-    } else if (selectedSection === 'last_round_players') {
-      return renderLastRoundPlayersSection();
-    } else {
-      return renderStubSection(selectedSection);
+  // Рендер контента в зависимости от секции
+  const renderContent = () => {
+    if (selectedTournament) {
+      if (selectedSection === 'overview') {
+        return renderTournamentOverview();
+      } else if (selectedSection === 'all_players') {
+        return renderAllPlayersSection();
+      } else if (selectedSection === 'last_round_players') {
+        return renderLastRoundPlayersSection();
+      } else {
+        return renderStubSection(selectedSection);
+      }
     }
-  }
 
-  // Список турниров
-  return (
+    // Список турниров
+    return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Турниры</h1>
@@ -1446,6 +1448,14 @@ export const Tournaments: React.FC = () => {
           </div>
         </CardContent>
       </Card>
+    </div>
+    );
+  };
+
+  // Основной return - контент + модалки (модалки всегда рендерятся)
+  return (
+    <>
+      {renderContent()}
 
       {/* Модальное окно загрузки сезона */}
       {uploadTournament && (
@@ -1474,6 +1484,6 @@ export const Tournaments: React.FC = () => {
           onSuccess={handleUploadSuccess}
         />
       )}
-    </div>
+    </>
   );
 };
