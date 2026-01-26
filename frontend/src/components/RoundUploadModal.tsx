@@ -131,7 +131,6 @@ export const RoundUploadModal: React.FC<RoundUploadModalProps> = ({
       await apiService.uploadRoundFile(
         slot.file!,
         tournamentId,
-        'TOTAL',
         round,
         String(season)
       );

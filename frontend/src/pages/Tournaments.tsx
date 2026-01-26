@@ -6,7 +6,8 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from 'react-query';
 import { 
-  ChevronRightIcon, 
+  ChevronRightIcon,
+  ChevronLeftIcon,
   CalendarIcon,
   UsersIcon,
   TrophyIcon,
@@ -244,7 +245,7 @@ export const Tournaments: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // Состояния для таблицы игроков за тур
-  const [roundSliceType, setRoundSliceType] = useState<'TOTAL' | 'PER90'>('TOTAL');
+  // Для тура всегда используем TOTAL (тур = 90 минут, поэтому PER90 не имеет смысла)
   const [roundSearch, setRoundSearch] = useState('');
   const [roundSearchInput, setRoundSearchInput] = useState('');
   const [roundCurrentPage, setRoundCurrentPage] = useState(1);
@@ -349,13 +350,13 @@ export const Tournaments: React.FC = () => {
   // Выбранный тур для отображения (по умолчанию - последний загруженный)
   const displayRound = selectedRound ?? currentRound;
 
-  // Загружаем данные игроков за выбранный тур
+  // Загружаем данные игроков за выбранный тур (всегда TOTAL - тур = 90 минут)
   const { data: roundPlayersData, isLoading: isLoadingRoundPlayers } = useQuery(
-    ['round-players', selectedTournamentId, displayRound, roundSliceType, roundSearch, roundCurrentPage, itemsPerPage, roundSortField, roundSortOrder],
+    ['round-players', selectedTournamentId, displayRound, roundSearch, roundCurrentPage, itemsPerPage, roundSortField, roundSortOrder],
     () => apiService.getAllPlayersFromDatabase(
       roundCurrentPage,
       itemsPerPage,
-      roundSliceType,
+      'TOTAL',
       roundSearch || undefined,
       selectedTournamentId ?? undefined,
       undefined,
@@ -878,26 +879,6 @@ export const Tournaments: React.FC = () => {
                 </div>
               </div>
             </button>
-
-            {/* Тумблер TOTAL / PER90 */}
-            <div className="flex items-center gap-2 bg-yellow-50 rounded-lg p-1 border border-yellow-200">
-              <button
-                onClick={() => { setRoundSliceType('TOTAL'); setRoundCurrentPage(1); }}
-                className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                  roundSliceType === 'TOTAL' ? 'bg-white text-yellow-700 shadow' : 'text-yellow-600 hover:text-yellow-800'
-                }`}
-              >
-                Всего за тур
-              </button>
-              <button
-                onClick={() => { setRoundSliceType('PER90'); setRoundCurrentPage(1); }}
-                className={`px-4 py-2 rounded-lg font-medium transition-all ${
-                  roundSliceType === 'PER90' ? 'bg-white text-yellow-700 shadow' : 'text-yellow-600 hover:text-yellow-800'
-                }`}
-              >
-                За 90 минут
-              </button>
-            </div>
           </div>
         </div>
 
@@ -905,24 +886,58 @@ export const Tournaments: React.FC = () => {
         <Card>
           <CardContent>
             <div className="flex gap-4 items-center">
-              {/* Переключатель туров */}
+              {/* Переключатель туров с кнопками навигации */}
               {availableRounds.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-gray-600 whitespace-nowrap">Тур:</label>
+                <div className="flex items-center gap-1">
+                  {/* Кнопка "Предыдущий тур" */}
+                  <button
+                    onClick={() => {
+                      const sortedRounds = [...availableRounds].sort((a, b) => a - b);
+                      const currentIndex = sortedRounds.indexOf(displayRound);
+                      if (currentIndex > 0) {
+                        setSelectedRound(sortedRounds[currentIndex - 1]);
+                        setRoundCurrentPage(1);
+                      }
+                    }}
+                    disabled={displayRound === Math.min(...availableRounds)}
+                    className="p-2 rounded-lg border border-yellow-300 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                    title="Предыдущий тур"
+                  >
+                    <ChevronLeftIcon className="w-5 h-5" />
+                  </button>
+
+                  {/* Выпадающий список для выбора конкретного тура */}
                   <select
                     value={displayRound}
                     onChange={(e) => {
                       setSelectedRound(Number(e.target.value));
                       setRoundCurrentPage(1);
                     }}
-                    className="px-3 py-2 border border-yellow-300 rounded-lg bg-yellow-50 text-yellow-800 font-medium focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 cursor-pointer min-w-[100px]"
+                    className="px-4 py-2 border border-yellow-300 rounded-lg bg-yellow-50 text-yellow-800 font-bold text-center focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 cursor-pointer min-w-[100px]"
                   >
                     {availableRounds.map((round) => (
                       <option key={round} value={round}>
-                        {round === currentRound ? `Тур ${round} (последний)` : `Тур ${round}`}
+                        Тур {round}{round === currentRound ? ' ★' : ''}
                       </option>
                     ))}
                   </select>
+
+                  {/* Кнопка "Следующий тур" */}
+                  <button
+                    onClick={() => {
+                      const sortedRounds = [...availableRounds].sort((a, b) => a - b);
+                      const currentIndex = sortedRounds.indexOf(displayRound);
+                      if (currentIndex < sortedRounds.length - 1) {
+                        setSelectedRound(sortedRounds[currentIndex + 1]);
+                        setRoundCurrentPage(1);
+                      }
+                    }}
+                    disabled={displayRound === Math.max(...availableRounds)}
+                    className="p-2 rounded-lg border border-yellow-300 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                    title="Следующий тур"
+                  >
+                    <ChevronRightIcon className="w-5 h-5" />
+                  </button>
                 </div>
               )}
 
@@ -964,10 +979,6 @@ export const Tournaments: React.FC = () => {
             <CardTitle className="flex items-center">
               <FlagIcon className="w-5 h-5 mr-2 text-yellow-600" />
               {roundSearch ? `Результаты поиска: ${totalCount}` : `Игроков за тур ${roundNum}: ${totalCount}`}
-              {' '}
-              <span className="text-sm font-normal text-gray-500 ml-2">
-                ({roundSliceType === 'TOTAL' ? 'суммарная за тур' : 'за 90 минут'})
-              </span>
               {roundSortField && (
                 <span className="ml-2 text-sm font-normal text-yellow-600">
                   Сортировка: {PLAYER_COLUMNS.find(c => c.key === roundSortField)?.label || roundSortField} ({roundSortOrder === 'asc' ? '↑' : '↓'})

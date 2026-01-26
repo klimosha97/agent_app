@@ -253,18 +253,18 @@ class ApiService {
   /**
    * Загрузка данных за конкретный тур
    * Данные хранятся отдельно от сезонных (period_type='ROUND')
+   * Всегда используем TOTAL (тур = 90 минут, PER90 не имеет смысла)
    */
   async uploadRoundFile(
     file: File,
     tournamentId: number,
-    sliceType: 'TOTAL' | 'PER90',
     roundNumber: number,
     season?: string
   ): Promise<any> {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('tournament_id', tournamentId.toString());
-    formData.append('slice_type', sliceType);
+    formData.append('slice_type', 'TOTAL');
     formData.append('round_number', roundNumber.toString());
     
     if (season) {
