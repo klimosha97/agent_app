@@ -360,3 +360,4 @@ metrics_catalog (справочник для player_statistics.metric_code)
 - ❌ Миграциях при добавлении метрик
 
 
+

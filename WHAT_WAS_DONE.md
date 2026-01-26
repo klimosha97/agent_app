@@ -425,3 +425,4 @@ psql -U klim -d football_stats -c "SELECT COUNT(*) FROM players WHERE tournament
 **Спасибо за отличную идею! 🌟**
 
 
+

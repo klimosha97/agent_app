@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS metrics_catalog (
 INSERT INTO metrics_catalog (metric_code, display_name_ru, display_name_en, data_type, category, is_key_metric) VALUES
     -- Базовая информация
     ('minutes', 'Минут на поле', 'Minutes played', 'INTEGER', 'basic', true),
-    ('index', 'Index', 'Index', 'FLOAT', 'basic', false),
+    ('index', 'Индекс Рустат', 'Rustat Index', 'FLOAT', 'basic', true),
     
     -- Ошибки
     ('goal_errors', 'Голевые ошибки', 'Goal errors', 'INTEGER', 'errors', false),

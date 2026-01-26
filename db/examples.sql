@@ -380,3 +380,4 @@ LEFT JOIN player_statistics ps ON ps.slice_id = ss.slice_id
 WHERE ps.slice_id IS NULL;
 
 
+

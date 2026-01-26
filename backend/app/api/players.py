@@ -24,6 +24,8 @@ router = APIRouter()
 async def get_all_players_database(
     tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
     slice_type: str = Query("TOTAL", description="Тип статистики: TOTAL или PER90"),
+    period_type: str = Query("SEASON", description="Тип периода: SEASON или ROUND"),
+    round_number: Optional[int] = Query(None, ge=1, le=50, description="Номер тура (для period_type=ROUND)"),
     search: Optional[str] = Query(None, description="Поиск по имени игрока или команде"),
     position_group: Optional[str] = Query(None, description="Группа позиций: ATT, MID, DEF"),
     page: int = Query(1, ge=1, description="Номер страницы"),
@@ -38,9 +40,11 @@ async def get_all_players_database(
     Поддерживает:
     - Фильтрацию по турниру
     - Переключение TOTAL/PER90
+    - Переключение SEASON/ROUND (период)
+    - Указание номера тура для period_type=ROUND
     - Поиск
     - Фильтр по позиции
-    - Сортировку
+    - Сортировку по любому полю
     - Пагинацию
     """
     try:
@@ -56,6 +60,31 @@ async def get_all_players_database(
             )
         
         pivot_sql = ",\n                    ".join(pivot_cases)
+        
+        # Определяем поле сортировки (по умолчанию goals)
+        safe_sort_field = sort_field if sort_field else 'goals'
+        
+        # Строковые поля сортируются по тексту, остальные по числам
+        string_fields = {'full_name', 'team_name', 'position_code', 'position_group', 'position_name', 'citizenship'}
+        
+        # Формируем ORDER BY динамически
+        if safe_sort_field in string_fields:
+            if sort_order == 'asc':
+                order_sql = f"ORDER BY {safe_sort_field} ASC NULLS LAST"
+            else:
+                order_sql = f"ORDER BY {safe_sort_field} DESC NULLS LAST"
+        else:
+            # Для числовых полей
+            if sort_order == 'asc':
+                order_sql = f"ORDER BY {safe_sort_field} ASC NULLS LAST"
+            else:
+                order_sql = f"ORDER BY {safe_sort_field} DESC NULLS LAST"
+        
+        # Определяем period_value для фильтра
+        # Для ROUND используем номер тура, для SEASON - не фильтруем по period_value
+        period_value_filter = ""
+        if period_type == 'ROUND' and round_number:
+            period_value_filter = "AND ss.period_value = :period_value"
         
         # Базовый запрос с динамическим PIVOT всех метрик
         query_sql = f"""
@@ -77,7 +106,8 @@ async def get_all_players_database(
                 JOIN stat_slices ss ON ss.tournament_id = p.tournament_id
                 JOIN player_statistics ps ON ps.player_id = p.player_id AND ps.slice_id = ss.slice_id
                 WHERE ss.slice_type = :slice_type
-                  AND ss.period_type = 'SEASON'
+                  AND ss.period_type = :period_type
+                  {period_value_filter}
                   AND (:tournament_id IS NULL OR p.tournament_id = :tournament_id)
                   AND (:position_group IS NULL OR pos.group_code = :position_group)
                   AND (:search IS NULL OR 
@@ -89,13 +119,7 @@ async def get_all_players_database(
             SELECT *,
                 COUNT(*) OVER() as total_count
             FROM player_metrics
-            ORDER BY 
-                CASE WHEN :sort_field = 'full_name' THEN full_name END ASC,
-                CASE WHEN :sort_field = 'goals' THEN goals END DESC NULLS LAST,
-                CASE WHEN :sort_field = 'xg' THEN xg END DESC NULLS LAST,
-                CASE WHEN :sort_field = 'shots' THEN shots END DESC NULLS LAST,
-                CASE WHEN :sort_field = 'passes' THEN passes END DESC NULLS LAST,
-                full_name ASC
+            {order_sql}
             LIMIT :limit OFFSET :offset
         """
         
@@ -104,16 +128,22 @@ async def get_all_players_database(
         search_pattern = f"%{search}%" if search else None
         offset = (page - 1) * limit
         
-        result = db.execute(query, {
+        params = {
             'slice_type': slice_type,
+            'period_type': period_type,
             'tournament_id': tournament_id,
             'position_group': position_group,
             'search': search,
             'search_pattern': search_pattern,
-            'sort_field': sort_field or 'goals',
             'limit': limit,
             'offset': offset
-        })
+        }
+        
+        # Добавляем period_value только для ROUND
+        if period_type == 'ROUND' and round_number:
+            params['period_value'] = str(round_number)
+        
+        result = db.execute(query, params)
         
         rows = result.fetchall()
         
@@ -160,6 +190,8 @@ async def get_all_players_database(
         
         total_pages = (total_count + limit - 1) // limit
         
+        period_info = f"за тур {round_number}" if period_type == 'ROUND' and round_number else "за сезон"
+        
         return {
             'success': True,
             'data': players_data,
@@ -168,11 +200,46 @@ async def get_all_players_database(
             'per_page': limit,
             'pages': total_pages,
             'slice_type': slice_type,
-            'message': f'Найдено {total_count} игроков ({slice_type})'
+            'period_type': period_type,
+            'round_number': round_number if period_type == 'ROUND' else None,
+            'message': f'Найдено {total_count} игроков ({slice_type}, {period_info})'
         }
         
     except Exception as e:
         logger.error(f"Error getting players: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tournaments/{tournament_id}/rounds")
+async def get_tournament_rounds(
+    tournament_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Получить список загруженных туров для турнира.
+    Возвращает номера туров, для которых есть данные (period_type='ROUND').
+    """
+    try:
+        result = db.execute(text("""
+            SELECT DISTINCT CAST(period_value AS INTEGER) as round_number
+            FROM stat_slices
+            WHERE tournament_id = :tournament_id
+              AND period_type = 'ROUND'
+            ORDER BY round_number DESC
+        """), {'tournament_id': tournament_id})
+        
+        rounds = [row[0] for row in result.fetchall()]
+        
+        return {
+            'success': True,
+            'tournament_id': tournament_id,
+            'rounds': rounds,
+            'total': len(rounds),
+            'message': f'Найдено {len(rounds)} загруженных туров'
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting tournament rounds: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

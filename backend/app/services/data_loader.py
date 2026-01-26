@@ -328,40 +328,46 @@ class DataLoader:
         Returns:
             (slice_id, is_new): ID слайса и флаг "новый ли это слайс"
         """
-        # Для SEASON: всегда обновляем существующий (если не force_new)
-        if period_type == 'SEASON' and not force_new:
-            # Пытаемся найти существующий слайс
-            existing = self.db.execute(text("""
-                SELECT slice_id 
-                FROM stat_slices
-                WHERE tournament_id = :tournament_id
-                  AND slice_type = :slice_type
-                  AND period_type = :period_type
-                  AND period_value = :period_value
-            """), {
-                'tournament_id': tournament_id,
-                'slice_type': slice_type,
-                'period_type': period_type,
-                'period_value': period_value
-            })
-            
-            existing_id = existing.scalar()
-            
-            if existing_id:
-                # Обновляем существующий
-                self.db.execute(text("""
-                    UPDATE stat_slices
-                    SET uploaded_at = CURRENT_TIMESTAMP,
-                        description = :description
-                    WHERE slice_id = :slice_id
-                """), {
-                    'slice_id': existing_id,
-                    'description': f'{slice_type} {period_type} {period_value} (обновлено)'
-                })
-                logger.info(f"♻️ Updating existing SEASON slice: {existing_id}")
-                return (existing_id, False)
+        # Пытаемся найти существующий слайс (для SEASON и ROUND)
+        existing = self.db.execute(text("""
+            SELECT slice_id 
+            FROM stat_slices
+            WHERE tournament_id = :tournament_id
+              AND slice_type = :slice_type
+              AND period_type = :period_type
+              AND period_value = :period_value
+        """), {
+            'tournament_id': tournament_id,
+            'slice_type': slice_type,
+            'period_type': period_type,
+            'period_value': period_value
+        })
         
-        # Создаём новый слайс (для ROUND или force_new=True)
+        existing_id = existing.scalar()
+        
+        if existing_id:
+            # Для ROUND - удаляем старую статистику перед перезаписью
+            if period_type == 'ROUND':
+                deleted = self.db.execute(text("""
+                    DELETE FROM player_statistics
+                    WHERE slice_id = :slice_id
+                """), {'slice_id': existing_id})
+                logger.info(f"🗑️ Deleted {deleted.rowcount} old stats for ROUND slice: {existing_id}")
+            
+            # Обновляем существующий слайс
+            self.db.execute(text("""
+                UPDATE stat_slices
+                SET uploaded_at = CURRENT_TIMESTAMP,
+                    description = :description
+                WHERE slice_id = :slice_id
+            """), {
+                'slice_id': existing_id,
+                'description': f'{slice_type} {period_type} {period_value} (обновлено)'
+            })
+            logger.info(f"♻️ Updating existing {period_type} slice: {existing_id}")
+            return (existing_id, False)
+        
+        # Создаём новый слайс если не найден существующий
         result = self.db.execute(text("""
             INSERT INTO stat_slices (tournament_id, slice_type, period_type, period_value, description)
             VALUES (:tournament_id, :slice_type, :period_type, :period_value, :description)

@@ -222,3 +222,4 @@ ORDER BY goals DESC;
 - `examples.sql` — готовые запросы
 
 
+

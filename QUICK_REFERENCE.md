@@ -243,3 +243,4 @@ A: `DELETE FROM stat_slices WHERE slice_id = X` (каскадом удалит �
 **Готово! 🚀**
 
 
+

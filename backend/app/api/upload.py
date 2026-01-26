@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Path
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.database import get_db
 from app.services.excel_import import ExcelImportService
@@ -521,6 +522,126 @@ async def upload_tournament_data(
         raise
     except Exception as e:
         logger.error(f"❌ Error uploading tournament data: {e}")
+        
+        if file_path and file_path.exists():
+            try:
+                os.unlink(file_path)
+            except:
+                pass
+        
+        raise HTTPException(status_code=500, detail=f"Ошибка загрузки: {str(e)}")
+
+
+@router.post("/upload/round", summary="Загрузить данные за тур")
+async def upload_round_data(
+    file: UploadFile = File(..., description="Excel файл с статистикой за тур"),
+    tournament_id: int = Form(..., ge=0, le=3, description="ID турнира"),
+    slice_type: str = Form(..., description="TOTAL или PER90"),
+    season: Optional[str] = Form(None, description="Год сезона (например '2025')"),
+    round_number: int = Form(..., ge=1, le=50, description="Номер тура (1-50)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Загрузка статистики за конкретный тур.
+    
+    **Параметры:**
+    - **file**: Excel файл (.xlsx)
+    - **tournament_id**: 0=МФЛ, 1=ЮФЛ-1, 2=ЮФЛ-2, 3=ЮФЛ-3
+    - **slice_type**: "TOTAL" (суммарная за тур) или "PER90" (за 90 минут)
+    - **season**: Год сезона (например "2025")
+    - **round_number**: Номер тура (1-50)
+    
+    **Хранение данных:**
+    - period_type = 'ROUND'
+    - period_value = номер тура (например '16')
+    - Данные хранятся отдельно от сезонных данных
+    """
+    start_time = datetime.now()
+    file_path = None
+    
+    try:
+        # 1. Валидация
+        if not file.filename.endswith(('.xlsx', '.xls')):
+            raise HTTPException(status_code=400, detail="Поддерживаются только файлы .xlsx и .xls")
+        
+        if slice_type not in ['TOTAL', 'PER90']:
+            raise HTTPException(status_code=400, detail="slice_type должен быть 'TOTAL' или 'PER90'")
+        
+        # 2. Проверяем соответствие файла турниру
+        file_tournament_id = excel_service.get_tournament_from_filename(file.filename)
+        if file_tournament_id is not None and file_tournament_id != tournament_id:
+            expected_patterns = {0: "mfl", 1: "yfl1", 2: "yfl2", 3: "yfl3"}
+            tournament_name = settings.get_tournament_name(tournament_id)
+            file_tournament_name = settings.get_tournament_name(file_tournament_id)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Несоответствие файла турниру! Выбран турнир '{tournament_name}', "
+                       f"но файл '{file.filename}' предназначен для '{file_tournament_name}'"
+            )
+        
+        # 3. Определяем сезон
+        if season is None:
+            season = str(datetime.now().year)
+        
+        # 4. Сохраняем файл
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_filename = f"{timestamp}_{tournament_id}_{slice_type}_round{round_number}_{file.filename}"
+        file_path = FilePath(settings.upload_path) / safe_filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        logger.info(f"📁 Round file saved: {file_path}")
+        
+        # 5. Загружаем через DataLoader с period_type='ROUND'
+        loader = DataLoader(db)
+        
+        result = loader.load_file(
+            file_path=file_path,
+            tournament_id=tournament_id,
+            slice_type=slice_type,
+            period_type='ROUND',  # ← Ключевое отличие: данные за тур
+            period_value=str(round_number),  # ← Номер тура как period_value
+            force_new_season=False
+        )
+        
+        # 6. Обновляем current_round турнира (только если загруженный тур больше текущего)
+        db.execute(text("""
+            UPDATE tournaments 
+            SET current_round = GREATEST(COALESCE(current_round, 0), :round_number),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :tournament_id
+        """), {
+            'tournament_id': tournament_id,
+            'round_number': round_number
+        })
+        db.commit()
+        logger.info(f"📊 Updated tournament {tournament_id} current_round to {round_number}")
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        tournament_name = settings.get_tournament_name(tournament_id)
+        
+        return {
+            "status": "success",
+            "file_name": file.filename,
+            "tournament_id": tournament_id,
+            "tournament_name": tournament_name,
+            "slice_type": slice_type,
+            "period_type": "ROUND",
+            "season": season,
+            "round_number": round_number,
+            "slice_id": result['slice_id'],
+            "players_loaded": result['players_loaded'],
+            "stats_loaded": result['stats_loaded'],
+            "duration_seconds": round(duration, 2),
+            "message": f"Данные за тур {round_number} ({slice_type}) успешно загружены"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error uploading round data: {e}")
         
         if file_path and file_path.exists():
             try:

@@ -190,12 +190,15 @@ class ApiService {
     tournamentId?: number,
     positionGroup?: string,
     sortField?: string,
-    sortOrder?: 'asc' | 'desc'
+    sortOrder?: 'asc' | 'desc',
+    periodType: 'SEASON' | 'ROUND' = 'SEASON',
+    roundNumber?: number
   ): Promise<PlayerListResponse> {
     const params = new URLSearchParams();
     params.append('page', page.toString());
     params.append('limit', limit.toString());
     params.append('slice_type', sliceType);
+    params.append('period_type', periodType);
     
     if (search) {
       params.append('search', search);
@@ -211,6 +214,9 @@ class ApiService {
     }
     if (sortOrder) {
       params.append('sort_order', sortOrder);
+    }
+    if (periodType === 'ROUND' && roundNumber !== undefined) {
+      params.append('round_number', roundNumber.toString());
     }
 
     const response = await this.api.get<PlayerListResponse>(`/players/database?${params}`);
@@ -244,8 +250,51 @@ class ApiService {
     return response.data;
   }
 
+  /**
+   * Загрузка данных за конкретный тур
+   * Данные хранятся отдельно от сезонных (period_type='ROUND')
+   */
+  async uploadRoundFile(
+    file: File,
+    tournamentId: number,
+    sliceType: 'TOTAL' | 'PER90',
+    roundNumber: number,
+    season?: string
+  ): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('tournament_id', tournamentId.toString());
+    formData.append('slice_type', sliceType);
+    formData.append('round_number', roundNumber.toString());
+    
+    if (season) {
+      formData.append('season', season);
+    }
+
+    const response = await this.api.post('/upload/round', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  }
+
   async clearDatabase(): Promise<any> {
     const response = await this.api.post('/database/clear');
+    return response.data;
+  }
+
+  /**
+   * Получить список загруженных туров для турнира
+   */
+  async getTournamentRounds(tournamentId: number): Promise<{
+    success: boolean;
+    tournament_id: number;
+    rounds: number[];
+    total: number;
+    message: string;
+  }> {
+    const response = await this.api.get(`/tournaments/${tournamentId}/rounds`);
     return response.data;
   }
 
