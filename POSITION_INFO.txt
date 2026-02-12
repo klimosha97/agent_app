@@ -19,44 +19,46 @@
 ------------------
 
 Ф Ц (Форвард центральный)
-- core: goals, xg, shots, shots_on_target, goal_chances, goal_chances_success
-- support: shots_head, aerial_duels, aerial_duels_success_pct, offensive_duels, offensive_duels_success_pct
-- risk: goal_errors, gross_errors, fouls, yellow_cards, red_cards
+- core: goals, assists, shots_on_target, goal_chances_success, aerial_duels_success_pct, shots_head, goal_chances_created, aerial_duels_success
+- support: aerial_duels, goal_chances, shots, shots_accurate_pct, xg, fouls_on_player, key_passes, key_passes_accurate_pct, duels_success_pct, offensive_duels_success_pct, dribbles
+- risk: goal_errors, gross_errors, fouls, yellow_cards, red_cards, losses
 
 Ф ЛЦ (Форвард левоцентральный)
-- core: goals, xg, shots, shots_on_target, goal_chances, dribbles, dribbles_success_pct
-- support: assists, xa, key_passes, passes_to_penalty_area, offensive_duels_success_pct, carries
-- risk: goal_errors, gross_errors, fouls, yellow_cards, red_cards
+- core: goals, assists, shots_on_target, goal_chances_success, aerial_duels_success_pct, shots_head, goal_chances_created, aerial_duels_success
+- support: aerial_duels, goal_chances, shots, shots_accurate_pct, xg, fouls_on_player, key_passes, key_passes_accurate_pct, duels_success_pct, offensive_duels_success_pct, dribbles
+- risk: goal_errors, gross_errors, fouls, yellow_cards, red_cards, losses
+
 
 Ф ПЦ (Форвард правоцентральный)
-- core: goals, xg, shots, shots_on_target, goal_chances, dribbles, dribbles_success_pct
-- support: assists, xa, key_passes, passes_to_penalty_area, offensive_duels_success_pct, carries
-- risk: goal_errors, gross_errors, fouls, yellow_cards, red_cards
+- core: goals, assists, shots_on_target, goal_chances_success, aerial_duels_success_pct, shots_head, goal_chances_created, aerial_duels_success
+- support: aerial_duels, goal_chances, shots, shots_accurate_pct, xg, fouls_on_player, key_passes, key_passes_accurate_pct, duels_success_pct, offensive_duels_success_pct, dribbles
+- risk: goal_errors, gross_errors, fouls, yellow_cards, red_cards, losses
+
 
 АП Ц (Атакующий полузащитник центральный)
-- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, progressive_passes
-- support: dribbles_success_pct, carries, shots, shots_on_target, xg
-- risk: goal_errors, gross_errors, fouls, yellow_cards, red_cards
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles, dribbles_success_pct, progressive_passes.
+- risk: fouls, yellow_cards, red_cards
 
 АП Л (Атакующий полузащитник левый)
-- core: key_passes, assists, xa, dribbles, dribbles_success_pct, carries, passes_to_penalty_area, crosses
-- support: shots, shots_on_target, xg, progressive_passes
-- risk: fouls, yellow_cards, red_cards, gross_errors
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, , dribbles_success_pct, progressive_passes.
+- risk: fouls, yellow_cards, red_cards
 
 АП П (Атакующий полузащитник правый)
-- core: key_passes, assists, xa, dribbles, dribbles_success_pct, carries, passes_to_penalty_area, crosses
-- support: shots, shots_on_target, xg, progressive_passes
-- risk: fouls, yellow_cards, red_cards, gross_errors
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, , dribbles_success_pct, progressive_passes.
+- risk: fouls, yellow_cards, red_cards
 
 АП ЛЦ (Атакующий полузащитник левоцентральный)
-- core: progressive_passes, passes_to_final_third, key_passes, passes_for_shot, assists, xa, carries
-- support: dribbles_success_pct, shots, xg, offensive_duels_success_pct
-- risk: fouls, yellow_cards, red_cards, gross_errors
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles, dribbles_success_pct, progressive_passes.
+- risk: fouls, yellow_cards, red_cards
 
 АП ПЦ (Атакующий полузащитник правоцентральный)
-- core: progressive_passes, passes_to_final_third, key_passes, passes_for_shot, assists, xa, carries
-- support: dribbles_success_pct, shots, xg, offensive_duels_success_pct
-- risk: fouls, yellow_cards, red_cards, gross_errors
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles, dribbles_success_pct, progressive_passes.
+- risk: fouls, yellow_cards, red_cards
 
 
 ГРУППА MID — ПОЛУЗАЩИТА
