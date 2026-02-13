@@ -1,11 +1,6 @@
 СПРАВОЧНИК МЕТРИК ПО ПОЗИЦИЯМ (Rustat)
 =====================================
 
-Назначение:
-- Для каждого игрока берём его позицию (position_code)
-- Сравниваем его статистику ЗА ТУР (по сути на 90 минут) с средними PER90 по турниру
-- Используем только релевантные метрики для его позиции
-
 Формат:
 - core: самые важные метрики для оценки роли
 - support: дополнительные метрики профиля
@@ -36,27 +31,27 @@
 
 
 АП Ц (Атакующий полузащитник центральный)
-- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries
 - support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles, dribbles_success_pct, progressive_passes, offensive_duels_success_pct
 - risk: fouls, yellow_cards, red_cards, losses_own_half
 
 АП Л (Атакующий полузащитник левый)
-- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles
-- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, , dribbles_success_pct, progressive_passes, offensive_duels_success_pct
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles_success_pct, progressive_passes, offensive_duels_success_pct
 - risk: fouls, yellow_cards, red_cards, losses_own_half
 
 АП П (Атакующий полузащитник правый)
-- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles
-- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, , dribbles_success_pct, progressive_passes, offensive_duels_success_pct
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles_success_pct, progressive_passes, offensive_duels_success_pct
 - risk: fouls, yellow_cards, red_cards, losses_own_half
 
 АП ЛЦ (Атакующий полузащитник левоцентральный)
-- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries
 - support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles, dribbles_success_pct, progressive_passes, offensive_duels_success_pct
 - risk: fouls, yellow_cards, red_cards, losses_own_half
 
 АП ПЦ (Атакующий полузащитник правоцентральный)
-- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_final_third, passes_to_penalty_area, final_third_entries
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries
 - support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles, dribbles_success_pct, progressive_passes, offensive_duels_success_pct
 - risk: fouls, yellow_cards, red_cards, losses_own_half
 
@@ -65,7 +60,7 @@
 -----------------------
 
 П Ц (Полузащитник центральный)
-- core: key_passes, passes_accurate_pct, progressive_passes, passes_to_final_third, duels_success_pct, tackles, duels, dribbles, final_third_entries, final_third_entries_dribble, tackels
+- core: key_passes, passes_accurate_pct, progressive_passes, passes_to_final_third, duels_success_pct, tackles, duels, dribbles, final_third_entries, final_third_entries_dribble
 - support: passes, passes_to_penalty_area, recoveries, interceptions, goals, goal_chances_created, duels_success_pct, offensive_duels_success_pct, passes_to_final_third_accurate_pct
 - risk: gross_errors, fouls, yellow_cards, red_cards, losses_own_half
 
