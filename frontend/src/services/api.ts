@@ -456,6 +456,215 @@ class ApiService {
     return response.data;
   }
 
+  // === Методы Talent Scouting (анализ) ===
+
+  /**
+   * Получить конфигурацию метрик по позициям
+   */
+  async getPositionMetrics(positionCode?: string): Promise<any> {
+    const params = positionCode ? `?position_code=${positionCode}` : '';
+    const response = await this.api.get(`/positions/metrics${params}`);
+    return response.data;
+  }
+
+  /**
+   * Получить корзины команд для турнира
+   */
+  async getTeamTiers(tournamentId: number, season?: string): Promise<any> {
+    const params = season ? `?season=${season}` : '';
+    const response = await this.api.get(`/tiers/${tournamentId}${params}`);
+    return response.data;
+  }
+
+  /**
+   * Заполнить список команд из БД (auto-populate)
+   */
+  async populateTeamTiers(tournamentId: number): Promise<any> {
+    const response = await this.api.post(`/tiers/${tournamentId}/populate`);
+    return response.data;
+  }
+
+  /**
+   * Обновить корзины команд
+   */
+  async updateTeamTiers(
+    tournamentId: number,
+    teams: Array<{ team_name: string; tier: string | null }>,
+    season?: string
+  ): Promise<any> {
+    const response = await this.api.put(`/tiers/${tournamentId}`, {
+      teams,
+      season,
+    });
+    return response.data;
+  }
+
+  /**
+   * Получить эталонный сезон для турнира
+   */
+  async getBenchmark(tournamentId: number): Promise<any> {
+    const response = await this.api.get(`/benchmarks/${tournamentId}`);
+    return response.data;
+  }
+
+  /**
+   * Загрузить эталонный сезон
+   */
+  async uploadBenchmark(
+    tournamentId: number,
+    file: File,
+    label?: string
+  ): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (label) formData.append('label', label);
+    const response = await this.api.post(`/benchmarks/${tournamentId}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  /**
+   * Удалить эталонный сезон
+   */
+  async deleteBenchmark(tournamentId: number): Promise<any> {
+    const response = await this.api.delete(`/benchmarks/${tournamentId}`);
+    return response.data;
+  }
+
+  /**
+   * Получить топ выступления за тур (Talent Scouting)
+   */
+  /**
+   * Пересчитать анализ тура
+   */
+  async recomputeRoundAnalysis(tournamentId: number, roundNumber: number): Promise<any> {
+    const response = await this.api.post(`/rounds/${tournamentId}/${roundNumber}/recompute`);
+    return response.data;
+  }
+
+  /**
+   * Пересчитать сезонный анализ (стабильность за весь сезон)
+   */
+  async recomputeSeasonAnalysis(tournamentId: number): Promise<any> {
+    const response = await this.api.post(`/season/${tournamentId}/recompute`);
+    return response.data;
+  }
+
+  /**
+   * Топ по позициям за сезон
+   */
+  async getSeasonTopByPosition(
+    tournamentId: number,
+    options?: { sort_by?: string; funnel?: string; baseline_kind?: string; limit_per_position?: number }
+  ): Promise<any> {
+    const params = new URLSearchParams();
+    if (options?.sort_by) params.append('sort_by', options.sort_by);
+    if (options?.funnel) params.append('funnel', options.funnel);
+    if (options?.baseline_kind) params.append('baseline_kind', options.baseline_kind);
+    if (options?.limit_per_position) params.append('limit_per_position', options.limit_per_position.toString());
+    const response = await this.api.get(`/season/${tournamentId}/top-by-position?${params}`);
+    return response.data;
+  }
+
+  /**
+   * Общий топ за сезон
+   */
+  async getSeasonTop(
+    tournamentId: number,
+    options?: { sort_by?: string; funnel?: string; baseline_kind?: string; position_code?: string; limit?: number }
+  ): Promise<any> {
+    const params = new URLSearchParams();
+    if (options?.sort_by) params.append('sort_by', options.sort_by);
+    if (options?.funnel) params.append('funnel', options.funnel);
+    if (options?.baseline_kind) params.append('baseline_kind', options.baseline_kind);
+    if (options?.position_code) params.append('position_code', options.position_code);
+    if (options?.limit) params.append('limit', options.limit.toString());
+    const response = await this.api.get(`/season/${tournamentId}/top?${params}`);
+    return response.data;
+  }
+
+  /**
+   * Получить перцентили игрока по позиции (сезон + тур)
+   */
+  async getPlayerPercentiles(
+    playerId: number,
+    roundNumber?: number
+  ): Promise<any> {
+    const params = new URLSearchParams();
+    if (roundNumber) params.append('round_number', roundNumber.toString());
+    const response = await this.api.get(`/player/${playerId}/percentiles?${params}`);
+    return response.data;
+  }
+
+  async getRoundTop(
+    tournamentId: number,
+    roundNumber: number,
+    options?: {
+      baseline_kind?: string;
+      sort_by?: string;
+      funnel?: string;
+      position_code?: string;
+      limit?: number;
+    }
+  ): Promise<any> {
+    const params = new URLSearchParams();
+    if (options?.baseline_kind) params.append('baseline_kind', options.baseline_kind);
+    if (options?.sort_by) params.append('sort_by', options.sort_by);
+    if (options?.funnel) params.append('funnel', options.funnel);
+    if (options?.position_code) params.append('position_code', options.position_code);
+    if (options?.limit) params.append('limit', options.limit.toString());
+    const response = await this.api.get(`/rounds/${tournamentId}/${roundNumber}/top?${params}`);
+    return response.data;
+  }
+
+  /**
+   * Получить топ по позициям за тур
+   */
+  async getRoundTopByPosition(
+    tournamentId: number,
+    roundNumber: number,
+    options?: {
+      baseline_kind?: string;
+      sort_by?: string;
+      funnel?: string;
+      limit_per_position?: number;
+    }
+  ): Promise<any> {
+    const params = new URLSearchParams();
+    if (options?.baseline_kind) params.append('baseline_kind', options.baseline_kind);
+    if (options?.sort_by) params.append('sort_by', options.sort_by);
+    if (options?.funnel) params.append('funnel', options.funnel);
+    if (options?.limit_per_position) params.append('limit_per_position', options.limit_per_position.toString());
+    const response = await this.api.get(`/rounds/${tournamentId}/${roundNumber}/top-by-position?${params}`);
+    return response.data;
+  }
+
+  /**
+   * Получить сравнение игрока по трём baselines
+   */
+  async getPlayerComparison(
+    tournamentId: number,
+    roundNumber: number,
+    playerId: number
+  ): Promise<any> {
+    const response = await this.api.get(`/rounds/${tournamentId}/${roundNumber}/player/${playerId}/comparison`);
+    return response.data;
+  }
+
+  /**
+   * Получить историю скоров игрока по турам
+   */
+  async getPlayerHistory(
+    tournamentId: number,
+    playerId: number,
+    baselineKind?: string
+  ): Promise<any> {
+    const params = baselineKind ? `?baseline_kind=${baselineKind}` : '';
+    const response = await this.api.get(`/rounds/${tournamentId}/history/${playerId}${params}`);
+    return response.data;
+  }
+
   // === Служебные методы ===
 
   async checkHealth(): Promise<any> {

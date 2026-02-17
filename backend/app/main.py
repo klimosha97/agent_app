@@ -40,6 +40,19 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to connect to database, exiting...")
         raise RuntimeError("Database connection failed")
     
+    # Синхронизируем конфигурацию метрик по позициям из POSITION_INFO.txt
+    try:
+        from app.database import create_db_session
+        from app.services.position_metrics import sync_position_metrics
+        session = create_db_session()
+        try:
+            result = sync_position_metrics(session)
+            logger.info(f"Position metrics synced: {result}")
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning(f"Could not sync position metrics on startup: {e}")
+    
     logger.info("Application startup completed")
     
     # Приложение работает...
@@ -192,11 +205,12 @@ async def app_info():
 
 
 # === Подключение API роутеров ===
-from app.api import players, tournaments, upload
+from app.api import players, tournaments, upload, analysis
 
 app.include_router(players.router, prefix=settings.api_prefix, tags=["Players"])
 app.include_router(tournaments.router, prefix=settings.api_prefix, tags=["Tournaments"])  
 app.include_router(upload.router, prefix=settings.api_prefix, tags=["Upload"])
+app.include_router(analysis.router, prefix=settings.api_prefix, tags=["Analysis"])
 
 
 # === Статические файлы (для загруженных Excel файлов) ===

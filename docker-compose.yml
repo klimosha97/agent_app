@@ -46,6 +46,8 @@ services:
       - ./backend:/app
       # Общий том для Excel файлов
       - ./uploads:/uploads
+      # Файл конфигурации позиций для Talent Scouting
+      - ./POSITION_INFO.txt:/data/POSITION_INFO.txt:ro
     depends_on:
       - db
     networks:

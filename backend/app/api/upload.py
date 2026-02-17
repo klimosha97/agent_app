@@ -391,6 +391,40 @@ async def upload_season_stats(
             force_new_season=force_new_season
         )
         
+        # 4. Авто-заполнение team_tiers для новых команд
+        # Используем period_value из slice (например '1-15'), а не год
+        try:
+            slice_season = result.get('period_value') or season or str(datetime.now().year)
+            # Также получаем period_value из слайса напрямую
+            pv_row = db.execute(text("""
+                SELECT period_value FROM stat_slices WHERE slice_id = :sid
+            """), {"sid": result['slice_id']}).fetchone()
+            if pv_row and pv_row[0]:
+                slice_season = pv_row[0]
+            
+            db.execute(text("""
+                INSERT INTO team_tiers (tournament_id, season, team_name, tier)
+                SELECT DISTINCT :tid, :season, p.team_name, NULL
+                FROM players p
+                WHERE p.tournament_id = :tid
+                ON CONFLICT (tournament_id, season, team_name) DO NOTHING
+            """), {"tid": tournament_id, "season": slice_season})
+            db.commit()
+            logger.info(f"Auto-populated team_tiers with season={slice_season}")
+        except Exception as te:
+            logger.warning(f"Could not auto-populate team_tiers: {te}")
+        
+        # 5. Автоматический расчёт сезонного анализа при загрузке PER90
+        season_analysis = None
+        if slice_type == 'PER90':
+            try:
+                from app.services.percentile_engine import compute_season_analysis
+                season_analysis = compute_season_analysis(db=db, tournament_id=tournament_id)
+                logger.info(f"Season analysis computed: {season_analysis}")
+            except Exception as sa_err:
+                logger.warning(f"Season analysis failed (non-critical): {sa_err}")
+                season_analysis = {"error": str(sa_err)}
+        
         duration = (datetime.now() - start_time).total_seconds()
         
         tournament_name = settings.get_tournament_name(tournament_id)
@@ -499,6 +533,15 @@ async def upload_tournament_data(
             period_value=season,
             force_new_season=False  # Всегда обновляем существующий сезон
         )
+        
+        # Авто-расчёт сезонного анализа при загрузке PER90
+        if slice_type == 'PER90':
+            try:
+                from app.services.percentile_engine import compute_season_analysis
+                sa_result = compute_season_analysis(db=db, tournament_id=tournament_id)
+                logger.info(f"Season analysis auto-computed: {sa_result}")
+            except Exception as sa_err:
+                logger.warning(f"Season analysis failed: {sa_err}")
         
         duration = (datetime.now() - start_time).total_seconds()
         tournament_name = settings.get_tournament_name(tournament_id)
@@ -619,6 +662,21 @@ async def upload_round_data(
         db.commit()
         logger.info(f"📊 Updated tournament {tournament_id} current_round to {round_number}")
         
+        # 7. Автоматический расчёт перцентилей и скоров (Talent Scouting)
+        analysis_result = None
+        try:
+            from app.services.percentile_engine import compute_round_analysis
+            analysis_result = compute_round_analysis(
+                db=db,
+                round_slice_id=result['slice_id'],
+                tournament_id=tournament_id,
+                season=season,
+            )
+            logger.info(f"📊 Analysis computed: {analysis_result}")
+        except Exception as ae:
+            logger.warning(f"⚠️ Analysis computation failed (non-critical): {ae}")
+            analysis_result = {"error": str(ae)}
+        
         duration = (datetime.now() - start_time).total_seconds()
         tournament_name = settings.get_tournament_name(tournament_id)
         
@@ -635,6 +693,7 @@ async def upload_round_data(
             "players_loaded": result['players_loaded'],
             "stats_loaded": result['stats_loaded'],
             "duration_seconds": round(duration, 2),
+            "analysis": analysis_result,
             "message": f"Данные за тур {round_number} ({slice_type}) успешно загружены"
         }
         

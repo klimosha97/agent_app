@@ -4,7 +4,7 @@
  * Клик на игрока открывает страницу профиля
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery } from 'react-query';
 import { 
   ChevronRightIcon,
@@ -22,7 +22,8 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
   ArrowUpIcon,
-  ArrowDownIcon
+  ArrowDownIcon,
+  ArrowsUpDownIcon,
 } from '@heroicons/react/24/outline';
 import { useTournaments } from '../hooks/useApi';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
@@ -37,6 +38,8 @@ import { apiService } from '../services/api';
 import { useQueryClient } from 'react-query';
 import { FlagIcon } from '@heroicons/react/24/solid';
 import { usePlayerNavigation } from '../App';
+import { PlayerComparisonCard } from '../components/PlayerComparisonCard';
+import { TierEditor } from '../components/TierEditor';
 
 // Определение колонок для таблицы игроков турнира
 interface ColumnDef {
@@ -221,7 +224,7 @@ const TOURNAMENT_TILES = [
   {
     id: 'top_by_position' as TournamentSection,
     title: 'Топ по позициям за сезон',
-    description: 'Лучшие игроки на каждой позиции',
+    description: 'Стабильность на дистанции — рейтинг PER90 за весь сезон',
     icon: ChartBarIcon,
     color: 'from-purple-500 to-pink-600',
     bgColor: 'bg-gradient-to-br from-purple-50 to-pink-50',
@@ -229,11 +232,22 @@ const TOURNAMENT_TILES = [
   }
 ];
 
+// Helpers for sessionStorage persistence
+function ssGet(key: string): string | null { try { return sessionStorage.getItem(key); } catch { return null; } }
+function ssSet(key: string, val: string) { try { sessionStorage.setItem(key, val); } catch {} }
+function ssRemove(key: string) { try { sessionStorage.removeItem(key); } catch {} }
+function ssGetNum(key: string): number | null { const v = ssGet(key); return v !== null ? Number(v) : null; }
+
+const VALID_SECTIONS: TournamentSection[] = ['overview', 'all_players', 'last_round_players', 'best_performances', 'top_by_position'];
+
 export const Tournaments: React.FC = () => {
   const { setSelectedPlayerId } = usePlayerNavigation();
   
-  const [selectedTournamentId, setSelectedTournamentId] = useState<number | null>(null);
-  const [selectedSection, setSelectedSection] = useState<TournamentSection>('overview');
+  const [selectedTournamentId, setSelectedTournamentId] = useState<number | null>(() => ssGetNum('t_tournId'));
+  const [selectedSection, setSelectedSection] = useState<TournamentSection>(() => {
+    const saved = ssGet('t_section');
+    return saved && VALID_SECTIONS.includes(saved as TournamentSection) ? saved as TournamentSection : 'overview';
+  });
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadTournament, setUploadTournament] = useState<Tournament | null>(null);
   const [roundUploadModalOpen, setRoundUploadModalOpen] = useState(false);
@@ -249,13 +263,33 @@ export const Tournaments: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // Состояния для таблицы игроков за тур
-  // Для тура всегда используем TOTAL (тур = 90 минут, поэтому PER90 не имеет смысла)
   const [roundSearch, setRoundSearch] = useState('');
   const [roundSearchInput, setRoundSearchInput] = useState('');
   const [roundCurrentPage, setRoundCurrentPage] = useState(1);
   const [roundSortField, setRoundSortField] = useState<string | null>('goals');
   const [roundSortOrder, setRoundSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [selectedRound, setSelectedRound] = useState<number | null>(null); // Выбранный тур для просмотра
+  const [selectedRound, setSelectedRound] = useState<number | null>(null);
+
+  // === Talent Scouting state ===
+  const [analysisBaseline, setAnalysisBaseline] = useState<string>('LEAGUE');
+  const [analysisSortBy, setAnalysisSortBy] = useState<string>('total_score');
+  const [analysisFunnel, setAnalysisFunnel] = useState<string>('all');
+  const [analysisRound, setAnalysisRound] = useState<number | null>(() => ssGetNum('t_analysisRound'));
+  const [comparisonPlayerId, setComparisonPlayerId] = useState<number | null>(null);
+  const [comparisonRound, setComparisonRound] = useState<number>(0);
+  const [comparisonMode, setComparisonMode] = useState<'season' | 'round'>('season');
+  const [tierEditorOpen, setTierEditorOpen] = useState(false);
+
+  // Persist key navigation state to sessionStorage
+  useEffect(() => {
+    if (selectedTournamentId !== null) ssSet('t_tournId', String(selectedTournamentId));
+    else ssRemove('t_tournId');
+  }, [selectedTournamentId]);
+  useEffect(() => { ssSet('t_section', selectedSection); }, [selectedSection]);
+  useEffect(() => {
+    if (analysisRound !== null) ssSet('t_analysisRound', String(analysisRound));
+    else ssRemove('t_analysisRound');
+  }, [analysisRound]);
 
   // Видимые колонки - загружаем из localStorage или используем дефолтные
   const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
@@ -351,8 +385,11 @@ export const Tournaments: React.FC = () => {
   const availableRounds = roundsData?.rounds || [];
   const currentRound = selectedTournament?.current_round || 0;
   
-  // Выбранный тур для отображения (по умолчанию - последний загруженный)
-  const displayRound = selectedRound ?? currentRound;
+  // Последний загруженный тур (максимальный из availableRounds)
+  const lastLoadedRound = availableRounds.length > 0 ? Math.max(...availableRounds) : currentRound;
+  
+  // Выбранный тур для отображения (по умолчанию - последний загруженный, а не current_round)
+  const displayRound = selectedRound ?? lastLoadedRound;
 
   // Загружаем данные игроков за выбранный тур (всегда TOTAL - тур = 90 минут)
   const { data: roundPlayersData, isLoading: isLoadingRoundPlayers } = useQuery(
@@ -495,13 +532,63 @@ export const Tournaments: React.FC = () => {
                 {tile.description}. Таблицы для хранения данных создаются заново.
               </p>
               <Badge variant="warning" size="lg">
-                🚧 В разработке
+                В разработке
               </Badge>
             </div>
           </CardContent>
         </Card>
       </div>
     );
+  };
+
+  // ========================================
+  // РЕНДЕР: Лучшие выступления за тур (Phase 6)
+  // ========================================
+  const renderBestPerformancesSection = () => {
+    if (!selectedTournament) return null;
+
+    const displayAnalysisRound = analysisRound ?? lastLoadedRound;
+
+    return <BestPerformancesSection
+      tournament={selectedTournament}
+      displayRound={displayAnalysisRound}
+      availableRounds={availableRounds}
+      baseline={analysisBaseline}
+      setBaseline={setAnalysisBaseline}
+      sortBy={analysisSortBy}
+      setSortBy={setAnalysisSortBy}
+      funnel={analysisFunnel}
+      setFunnel={setAnalysisFunnel}
+      setAnalysisRound={(r: number) => setAnalysisRound(r)}
+      onBack={handleBackToOverview}
+      onPlayerClick={(pid: number) => { setComparisonPlayerId(pid); setComparisonRound(displayAnalysisRound); setComparisonMode('round'); }}
+      onTierEditorOpen={() => setTierEditorOpen(true)}
+    />;
+  };
+
+  // ========================================
+  // РЕНДЕР: Топ по позициям за сезон (Phase 7)
+  // ========================================
+  const renderTopByPositionSection = () => {
+    if (!selectedTournament) return null;
+
+    const displayAnalysisRound = analysisRound ?? lastLoadedRound;
+
+    return <TopByPositionSection
+      tournament={selectedTournament}
+      displayRound={displayAnalysisRound}
+      availableRounds={availableRounds}
+      baseline={analysisBaseline}
+      setBaseline={setAnalysisBaseline}
+      sortBy={analysisSortBy}
+      setSortBy={setAnalysisSortBy}
+      funnel={analysisFunnel}
+      setFunnel={setAnalysisFunnel}
+      setAnalysisRound={(r: number) => setAnalysisRound(r)}
+      onBack={handleBackToOverview}
+      onPlayerClick={(pid: number) => { setComparisonPlayerId(pid); setComparisonRound(displayAnalysisRound); setComparisonMode('season'); }}
+      onTierEditorOpen={() => setTierEditorOpen(true)}
+    />;
   };
 
   // ========================================
@@ -1142,6 +1229,26 @@ export const Tournaments: React.FC = () => {
               <p className="text-gray-600">Выберите раздел для просмотра</p>
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={(e) => handleUploadClick(selectedTournament, e)}
+              className="border-blue-200 text-blue-700 hover:bg-blue-50"
+            >
+              <CloudArrowUpIcon className="w-4 h-4 mr-1.5" />
+              Загрузить сезон
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={(e) => handleRoundUploadClick(selectedTournament, e)}
+              className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+            >
+              <CloudArrowUpIcon className="w-4 h-4 mr-1.5" />
+              Загрузить тур
+            </Button>
+          </div>
         </div>
 
         {/* Информация о турнире */}
@@ -1239,7 +1346,7 @@ export const Tournaments: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {TOURNAMENT_TILES.map((tile) => {
             const IconComponent = tile.icon;
-            const isReady = tile.id === 'all_players'; // Только эта секция готова
+            const isReady = tile.id === 'all_players' || tile.id === 'best_performances' || tile.id === 'top_by_position';
             
             // Определяем значение для каждой плитки
             const getTileValue = () => {
@@ -1287,10 +1394,14 @@ export const Tournaments: React.FC = () => {
                   <p className="text-sm text-gray-500 mb-4">{tile.description}</p>
 
                   <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs text-gray-400 uppercase tracking-wide">{getTileLabel()}</p>
-                      <p className={`text-2xl font-bold ${tile.iconColor}`}>{getTileValue()}</p>
-                    </div>
+                    {tile.id === 'all_players' ? (
+                      <div>
+                        <p className="text-xs text-gray-400 uppercase tracking-wide">{getTileLabel()}</p>
+                        <p className={`text-2xl font-bold ${tile.iconColor}`}>{getTileValue()}</p>
+                      </div>
+                    ) : (
+                      <div />
+                    )}
                     <ChevronRightIcon className="w-5 h-5 text-gray-400 group-hover:text-gray-600 group-hover:translate-x-1 transition-all" />
                   </div>
                 </div>
@@ -1315,6 +1426,10 @@ export const Tournaments: React.FC = () => {
         return renderAllPlayersSection();
       } else if (selectedSection === 'last_round_players') {
         return renderLastRoundPlayersSection();
+      } else if (selectedSection === 'best_performances') {
+        return renderBestPerformancesSection();
+      } else if (selectedSection === 'top_by_position') {
+        return renderTopByPositionSection();
       } else {
         return renderStubSection(selectedSection);
       }
@@ -1507,6 +1622,1181 @@ export const Tournaments: React.FC = () => {
           onSuccess={handleUploadSuccess}
         />
       )}
+
+      {/* Карточка сравнения игрока */}
+      {comparisonPlayerId !== null && selectedTournament && (
+        <PlayerComparisonCard
+          isOpen={true}
+          onClose={() => setComparisonPlayerId(null)}
+          tournamentId={selectedTournament.id}
+          roundNumber={comparisonRound}
+          playerId={comparisonPlayerId}
+          mode={comparisonMode}
+        />
+      )}
+
+      {/* Редактор корзин команд */}
+      {selectedTournament && (
+        <TierEditor
+          isOpen={tierEditorOpen}
+          onClose={() => setTierEditorOpen(false)}
+          tournamentId={selectedTournament.id}
+          tournamentName={selectedTournament.full_name}
+        />
+      )}
     </>
+  );
+};
+
+
+// ================================================================
+// Sub-components for analysis sections
+// ================================================================
+
+const BASELINE_OPTIONS = [
+  { value: 'LEAGUE', label: 'Вся лига' },
+  { value: 'TIER', label: 'По корзине' },
+  { value: 'BENCHMARK', label: 'Эталон' },
+];
+const SORT_OPTIONS = [
+  { value: 'total_score', label: 'Core + Support' },
+  { value: 'core_score_adj', label: 'Core' },
+  { value: 'support_score', label: 'Support' },
+];
+const FUNNEL_OPTIONS = [
+  { value: 'all', label: 'Все' },
+  { value: 'p75', label: '75p+' },
+  { value: 'p85', label: '85p+' },
+  { value: 'p90', label: '90p+' },
+];
+
+interface AnalysisSectionProps {
+  tournament: Tournament;
+  displayRound: number;
+  availableRounds: number[];
+  baseline: string;
+  setBaseline: (v: string) => void;
+  sortBy: string;
+  setSortBy: (v: string) => void;
+  funnel: string;
+  setFunnel: (v: string) => void;
+  setAnalysisRound: (r: number) => void;
+  onBack: () => void;
+  onPlayerClick: (pid: number) => void;
+  onTierEditorOpen?: () => void;
+}
+
+function AnalysisControls({ baseline, setBaseline, sortBy, setSortBy, funnel, setFunnel, displayRound, availableRounds, setAnalysisRound, onTierEditorOpen, onTogglePositions, showPositions }: Partial<AnalysisSectionProps> & { displayRound: number; availableRounds: number[]; onTogglePositions?: () => void; showPositions?: boolean }) {
+  return (
+    <Card>
+      <CardContent>
+        <div className="flex flex-wrap gap-3 items-center">
+          {/* Round selector */}
+          {availableRounds.length > 0 && (
+            <select
+              value={displayRound}
+              onChange={(e) => setAnalysisRound?.(Number(e.target.value))}
+              className="px-3 py-2 border border-amber-300 rounded-lg bg-amber-50 text-amber-800 font-bold text-sm focus:ring-2 focus:ring-amber-500 cursor-pointer"
+            >
+              {availableRounds.map((r) => (
+                <option key={r} value={r}>Тур {r}</option>
+              ))}
+            </select>
+          )}
+
+          {/* Baseline */}
+          <div className="flex bg-gray-100 rounded-lg p-0.5">
+            {BASELINE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setBaseline?.(opt.value)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${baseline === opt.value ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-900'}`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Sort */}
+          <div className="flex bg-gray-100 rounded-lg p-0.5">
+            {SORT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setSortBy?.(opt.value)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${sortBy === opt.value ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-900'}`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Funnel */}
+          <div className="flex bg-gray-100 rounded-lg p-0.5">
+            {FUNNEL_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setFunnel?.(opt.value)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${funnel === opt.value ? 'bg-white text-purple-600 shadow' : 'text-gray-600 hover:text-gray-900'}`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Tier editor button — always visible */}
+          {onTierEditorOpen && (
+            <button
+              onClick={() => {
+                setBaseline?.('TIER');
+                onTierEditorOpen();
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-100 hover:bg-purple-200 rounded-lg transition-colors flex items-center gap-1"
+            >
+              <ArrowsUpDownIcon className="w-3.5 h-3.5" />
+              Настроить корзины
+            </button>
+          )}
+
+          {/* Top by position toggle */}
+          {onTogglePositions && (
+            <button
+              onClick={onTogglePositions}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1 ${
+                showPositions
+                  ? 'text-amber-800 bg-amber-200 hover:bg-amber-300'
+                  : 'text-amber-700 bg-amber-100 hover:bg-amber-200'
+              }`}
+            >
+              <ChartBarIcon className="w-3.5 h-3.5" />
+              Топ по позициям
+            </button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ScoreCell({ value, label }: { value: number | null; label?: string }) {
+  if (value === null || value === undefined) return <span className="text-gray-300">—</span>;
+  const pct = value * 100;
+  let colorClass = 'text-gray-600';
+  if (pct >= 90) colorClass = 'text-emerald-700 font-bold';
+  else if (pct >= 80) colorClass = 'text-emerald-600 font-semibold';
+  else if (pct >= 70) colorClass = 'text-blue-600 font-medium';
+  else if (pct >= 50) colorClass = 'text-gray-700';
+  else if (pct >= 30) colorClass = 'text-orange-600';
+  else colorClass = 'text-red-500';
+  return <span className={colorClass}>{pct.toFixed(0)}</span>;
+}
+
+function RiskBadges({ flags }: { flags: Record<string, any> }) {
+  if (!flags || Object.keys(flags).length === 0) return null;
+  const RISK_ICONS: Record<string, string> = {
+    red_cards: 'KK',
+    yellow_cards: 'ЖК',
+    goal_errors: 'ГО',
+    gross_errors: 'ГрО',
+    fouls: 'Фол',
+    losses: 'Пот',
+    losses_own_half: 'ПотСв',
+  };
+  return (
+    <div className="flex gap-1 flex-wrap">
+      {Object.entries(flags).map(([k, v]) => (
+        <span key={k} className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium bg-red-100 text-red-700 rounded">
+          {RISK_ICONS[k] || k}: {String(v)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+
+const BEST_PAGE_SIZE = 15;
+
+const BEST_SORTABLE_COLUMNS = [
+  { key: 'core_score_adj', label: 'Core', align: 'right' as const },
+  { key: 'support_score_adj', label: 'Support', align: 'right' as const },
+  { key: 'total_score', label: 'Total', align: 'right' as const },
+  { key: 'good_share_core', label: 'Good%', align: 'right' as const },
+];
+
+const BestPerformancesSection: React.FC<AnalysisSectionProps> = (props) => {
+  const { tournament, displayRound, onBack, onPlayerClick, baseline, funnel } = props;
+
+  // Local sort state (independent of global controls for column clicks)
+  const [localSort, setLocalSort] = useState<string>('core_score_adj');
+  const [localSortDir, setLocalSortDir] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+  const [showPositions, setShowPositions] = useState(false);
+
+  // Benchmark state
+  const roundBenchmarkFileRef = useRef<HTMLInputElement>(null);
+  const [roundBenchmarkUploading, setRoundBenchmarkUploading] = useState(false);
+  const [roundBenchmarkLabel, setRoundBenchmarkLabel] = useState('');
+  const [showRoundBenchmarkUpload, setShowRoundBenchmarkUpload] = useState(false);
+
+  const { data: roundBenchmarkInfo, refetch: refetchRoundBenchmark } = useQuery(
+    ['benchmark-info-round', tournament.id],
+    () => apiService.getBenchmark(tournament.id),
+    { staleTime: 30000 }
+  );
+
+  const handleRoundBenchmarkUpload = async (file: File) => {
+    setRoundBenchmarkUploading(true);
+    try {
+      const label = roundBenchmarkLabel.trim() || file.name.replace(/\.(xlsx|xls)$/i, '');
+      await apiService.uploadBenchmark(tournament.id, file, label);
+      setRoundBenchmarkLabel('');
+      setShowRoundBenchmarkUpload(false);
+      refetchRoundBenchmark();
+      alert('Эталон загружен. Нажмите «Пересчитать» чтобы перерасчёт тура включил сравнение с эталоном.');
+    } catch (e: any) {
+      alert('Ошибка загрузки: ' + (e?.response?.data?.detail || e?.message || 'unknown'));
+    } finally {
+      setRoundBenchmarkUploading(false);
+    }
+  };
+
+  const handleDeleteRoundBenchmark = async () => {
+    if (!window.confirm('Удалить эталонный сезон?')) return;
+    try {
+      await apiService.deleteBenchmark(tournament.id);
+      refetchRoundBenchmark();
+    } catch (e: any) {
+      alert('Ошибка: ' + (e?.response?.data?.detail || e?.message || 'unknown'));
+    }
+  };
+
+  const roundBenchmarkData = roundBenchmarkInfo?.data;
+
+  // Fetch top data — request more to allow client-side pagination
+  const { data, isLoading, refetch } = useQuery(
+    ['round-top', tournament.id, displayRound, baseline, 'core_score_adj', funnel],
+    () => apiService.getRoundTop(tournament.id, displayRound, { baseline_kind: baseline, sort_by: 'core_score_adj', funnel, limit: 200 }),
+    { enabled: displayRound > 0, keepPreviousData: true }
+  );
+
+  // Fetch top by position for round
+  const { data: posByPosData, isLoading: posByPosLoading } = useQuery(
+    ['round-top-position', tournament.id, displayRound, baseline, localSort, funnel],
+    () => apiService.getRoundTopByPosition(tournament.id, displayRound, { baseline_kind: baseline, sort_by: localSort, funnel, limit_per_position: 10 }),
+    { enabled: displayRound > 0 && showPositions, keepPreviousData: true }
+  );
+
+  // Reset page on sort change
+  useEffect(() => { setPage(1); }, [localSort, localSortDir, funnel, baseline, displayRound]);
+
+  const allPlayers: any[] = data?.data || [];
+
+  // Client-side sort
+  const sorted = [...allPlayers].sort((a, b) => {
+    const va = a[localSort] ?? -1;
+    const vb = b[localSort] ?? -1;
+    return localSortDir === 'desc' ? vb - va : va - vb;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / BEST_PAGE_SIZE));
+  const paginated = sorted.slice((page - 1) * BEST_PAGE_SIZE, page * BEST_PAGE_SIZE);
+
+  const handleColumnSort = (key: string) => {
+    if (localSort === key) {
+      setLocalSortDir(prev => prev === 'desc' ? 'asc' : 'desc');
+    } else {
+      setLocalSort(key);
+      setLocalSortDir('desc');
+    }
+  };
+
+  const SortIcon = ({ col }: { col: string }) => {
+    if (localSort !== col) return <ArrowsUpDownIcon className="w-3 h-3 ml-0.5 text-gray-300" />;
+    return localSortDir === 'desc'
+      ? <ArrowDownIcon className="w-3 h-3 ml-0.5 text-blue-600" />
+      : <ArrowUpIcon className="w-3 h-3 ml-0.5 text-blue-600" />;
+  };
+
+  // Position groups for "top by position"
+  const positions: Record<string, any> = posByPosData?.data || {};
+  const positionGroups: Record<string, string[]> = { ATT: [], MID: [], DEF: [] };
+  Object.entries(positions).forEach(([code, pos]: [string, any]) => {
+    const group = pos.position_group || 'DEF';
+    if (!positionGroups[group]) positionGroups[group] = [];
+    positionGroups[group].push(code);
+  });
+  const GROUP_LABELS: Record<string, string> = { ATT: 'Атака', MID: 'Полузащита', DEF: 'Защита' };
+  const GROUP_COLORS: Record<string, string> = {
+    ATT: 'border-red-200 bg-red-50/30',
+    MID: 'border-blue-200 bg-blue-50/30',
+    DEF: 'border-green-200 bg-green-50/30',
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center space-x-4">
+        <Button variant="secondary" size="sm" onClick={onBack}>
+          <ArrowLeftIcon className="w-4 h-4 mr-2" />
+          Назад к разделам
+        </Button>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center">
+            <StarIcon className="w-6 h-6 mr-2 text-amber-500" />
+            Лучшие выступления за тур
+          </h1>
+          <p className="text-gray-600">{tournament.full_name}</p>
+        </div>
+      </div>
+
+      {/* Controls */}
+      <AnalysisControls {...props} onTogglePositions={() => setShowPositions(!showPositions)} showPositions={showPositions} />
+
+      {/* Benchmark info bar (shown when Эталон baseline is selected) */}
+      {baseline === 'BENCHMARK' && (
+        <Card className="border-indigo-200 bg-indigo-50/30">
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center">
+                  <StarIcon className="w-4 h-4 text-indigo-600" />
+                </div>
+                {roundBenchmarkData ? (
+                  <div>
+                    <p className="text-sm font-medium text-indigo-900">{roundBenchmarkData.label}</p>
+                    <p className="text-xs text-indigo-500">
+                      Загружен: {roundBenchmarkData.uploaded_at ? new Date(roundBenchmarkData.uploaded_at).toLocaleDateString('ru-RU') : '—'}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-indigo-700">Эталонный сезон не загружен. Загрузите файл PER90 для сравнения.</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {roundBenchmarkData && (
+                  <button
+                    onClick={handleDeleteRoundBenchmark}
+                    className="px-2.5 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+                  >
+                    <TrashIcon className="w-3.5 h-3.5 inline mr-1" />
+                    Удалить
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowRoundBenchmarkUpload(!showRoundBenchmarkUpload)}
+                  className="px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-lg transition-colors flex items-center gap-1"
+                >
+                  <CloudArrowUpIcon className="w-3.5 h-3.5" />
+                  {roundBenchmarkData ? 'Заменить' : 'Загрузить эталон'}
+                </button>
+              </div>
+            </div>
+
+            {showRoundBenchmarkUpload && (
+              <div className="mt-3 pt-3 border-t border-indigo-200">
+                <div className="flex items-end gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-indigo-700 mb-1">Название эталона (необязательно)</label>
+                    <input
+                      type="text"
+                      value={roundBenchmarkLabel}
+                      onChange={(e) => setRoundBenchmarkLabel(e.target.value)}
+                      placeholder="Например: МФЛ 2024"
+                      className="w-full px-3 py-1.5 text-sm border border-indigo-200 rounded-lg bg-white focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      ref={roundBenchmarkFileRef}
+                      type="file"
+                      accept=".xlsx,.xls"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleRoundBenchmarkUpload(f);
+                        e.target.value = '';
+                      }}
+                    />
+                    <button
+                      onClick={() => roundBenchmarkFileRef.current?.click()}
+                      disabled={roundBenchmarkUploading}
+                      className="px-4 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {roundBenchmarkUploading ? 'Загрузка...' : 'Выбрать файл .xlsx'}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-indigo-400 mt-1.5">
+                  Файл должен содержать данные PER90 за сезон. Если не указать название — будет использовано имя файла.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ===== Content: Table OR Top by Position ===== */}
+      {!showPositions ? (
+      <Card>
+        <CardHeader className="bg-amber-50/50">
+          <CardTitle className="flex items-center justify-between">
+            <span className="flex items-center">
+              <StarIcon className="w-5 h-5 mr-2 text-amber-600" />
+              Тур {displayRound} &middot; {sorted.length} игроков
+            </span>
+            <span className="text-xs font-normal text-gray-500">
+              Стр. {page}/{totalPages}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-16 text-gray-500">
+              <svg className="animate-spin h-6 w-6 text-amber-500 mr-2" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Загрузка...
+            </div>
+          ) : sorted.length === 0 ? (
+            <div className="text-center py-16 text-gray-500">
+              <div className="w-16 h-16 mx-auto mb-4 bg-amber-100 rounded-full flex items-center justify-center">
+                <StarIcon className="w-8 h-8 text-amber-500" />
+              </div>
+              <p className="text-lg font-medium text-gray-700 mb-2">Нет данных для анализа</p>
+              <p className="mb-6 max-w-md mx-auto">
+                Для работы анализа нужны:<br/>
+                <span className="font-medium">1)</span> Сезонные данные PER90<br/>
+                <span className="font-medium">2)</span> Данные за конкретный тур
+              </p>
+              <button
+                onClick={async () => {
+                  try {
+                    await apiService.recomputeRoundAnalysis(tournament.id, displayRound);
+                    refetch();
+                  } catch (e: any) {
+                    alert('Ошибка пересчёта: ' + (e?.response?.data?.detail || e?.message || 'unknown'));
+                  }
+                }}
+                className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors"
+              >
+                Пересчитать тур {displayRound}
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-amber-50 border-b border-amber-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-8">#</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Игрок</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Команда</th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">Поз</th>
+                      {BEST_SORTABLE_COLUMNS.map((col) => (
+                        <th
+                          key={col.key}
+                          onClick={() => handleColumnSort(col.key)}
+                          className="px-3 py-2 text-right text-xs font-semibold text-gray-600 cursor-pointer hover:text-blue-600 select-none whitespace-nowrap"
+                        >
+                          <span className="inline-flex items-center">
+                            {col.label}
+                            <SortIcon col={col.key} />
+                          </span>
+                        </th>
+                      ))}
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Risk</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {paginated.map((p: any, idx: number) => (
+                      <tr
+                        key={p.player_id}
+                        onClick={() => onPlayerClick(p.player_id)}
+                        className="hover:bg-amber-50 cursor-pointer transition-colors"
+                      >
+                        <td className="px-3 py-2 text-sm text-gray-400 w-8">{(page - 1) * BEST_PAGE_SIZE + idx + 1}</td>
+                        <td className="px-3 py-2 text-sm font-medium text-blue-600 hover:underline">{p.full_name}</td>
+                        <td className="px-3 py-2 text-sm text-gray-600">{p.team_name}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-800">{p.position_code}</span>
+                        </td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums"><ScoreCell value={p.core_score_adj} /></td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums"><ScoreCell value={p.support_score_adj} /></td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold"><ScoreCell value={p.total_score} /></td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums"><ScoreCell value={p.good_share_core} /></td>
+                        <td className="px-3 py-2"><RiskBadges flags={p.risk_flags} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
+                  <button
+                    onClick={() => setPage(Math.max(1, page - 1))}
+                    disabled={page <= 1}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeftIcon className="w-4 h-4 inline mr-1" />
+                    Назад
+                  </button>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                      let pageNum: number;
+                      if (totalPages <= 7) {
+                        pageNum = i + 1;
+                      } else if (page <= 4) {
+                        pageNum = i + 1;
+                      } else if (page >= totalPages - 3) {
+                        pageNum = totalPages - 6 + i;
+                      } else {
+                        pageNum = page - 3 + i;
+                      }
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setPage(pageNum)}
+                          className={`w-8 h-8 text-sm font-medium rounded-md transition-colors ${
+                            page === pageNum
+                              ? 'bg-amber-500 text-white'
+                              : 'text-gray-600 hover:bg-gray-100'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => setPage(Math.min(totalPages, page + 1))}
+                    disabled={page >= totalPages}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Далее
+                    <ChevronRightIcon className="w-4 h-4 inline ml-1" />
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+      ) : (
+      /* ===== Top by Position for Round (replaces table) ===== */
+        posByPosLoading ? (
+          <div className="flex items-center justify-center py-12 text-gray-500">
+            <svg className="animate-spin h-6 w-6 text-amber-500 mr-2" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Загрузка позиций...
+          </div>
+        ) : Object.keys(positions).length === 0 ? (
+          <Card>
+            <CardContent>
+              <div className="text-center py-8 text-gray-500">Нет данных по позициям за тур</div>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+          {['ATT', 'MID', 'DEF'].map((group) => {
+            const posCodes = positionGroups[group] || [];
+            if (posCodes.length === 0) return null;
+            return (
+              <div key={group} className="space-y-3 mb-4">
+                <h2 className="text-lg font-semibold text-gray-800">{GROUP_LABELS[group]}</h2>
+                {posCodes.map((posCode) => {
+                  const pos = positions[posCode];
+                  if (!pos) return null;
+                  return (
+                    <Card key={posCode} className={`border ${GROUP_COLORS[group]}`}>
+                      <CardHeader>
+                        <CardTitle className="text-sm">
+                          {pos.position_name} ({pos.position_code}) — {(pos.players || []).length} игроков
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-0">
+                        <table className="w-full">
+                          <thead className="bg-gray-50/80">
+                            <tr>
+                              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600">#</th>
+                              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600">Игрок</th>
+                              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600">Команда</th>
+                              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600">Core</th>
+                              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600">Support</th>
+                              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600">Total</th>
+                              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600">Good%</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {(pos.players || []).map((p: any) => (
+                              <tr
+                                key={p.player_id}
+                                onClick={() => onPlayerClick(p.player_id)}
+                                className="hover:bg-white cursor-pointer transition-colors"
+                              >
+                                <td className="px-3 py-1.5 text-sm text-gray-400">{p.rank}</td>
+                                <td className="px-3 py-1.5 text-sm font-medium text-blue-600 hover:underline">
+                                  {p.full_name}
+                                  {p.position_detail && (
+                                    <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-500">{p.position_detail}</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-1.5 text-sm text-gray-600">{p.team_name}</td>
+                                <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.core_score_adj} /></td>
+                                <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.support_score_adj} /></td>
+                                <td className="px-3 py-1.5 text-sm text-right tabular-nums font-semibold"><ScoreCell value={p.total_score} /></td>
+                                <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.good_share_core} /></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            );
+          })}
+          </>
+        )
+      )}
+    </div>
+  );
+};
+
+
+const SEASON_PAGE_SIZE = 15;
+
+const SEASON_BASELINE_OPTIONS = [
+  { value: 'SEASON', label: 'Вся лига' },
+  { value: 'SEASON_BENCHMARK', label: 'Эталон' },
+];
+
+const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
+  const { tournament, onBack, onPlayerClick, sortBy, setSortBy, funnel, setFunnel } = props;
+  const [recomputing, setRecomputing] = useState(false);
+  const [localSort, setLocalSort] = useState<string>('core_score_adj');
+  const [localSortDir, setLocalSortDir] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
+  const [showPositions, setShowPositions] = useState(false);
+  const [seasonBaseline, setSeasonBaseline] = useState<string>('SEASON');
+
+  // Benchmark state
+  const benchmarkFileRef = useRef<HTMLInputElement>(null);
+  const [benchmarkUploading, setBenchmarkUploading] = useState(false);
+  const [benchmarkLabel, setBenchmarkLabel] = useState('');
+  const [showBenchmarkUpload, setShowBenchmarkUpload] = useState(false);
+
+  const { data: benchmarkInfo, refetch: refetchBenchmark } = useQuery(
+    ['benchmark-info', tournament.id],
+    () => apiService.getBenchmark(tournament.id),
+    { staleTime: 30000 }
+  );
+
+  const { data: flatData, isLoading: flatLoading, refetch } = useQuery(
+    ['season-top-flat', tournament.id, funnel, seasonBaseline],
+    () => apiService.getSeasonTop(tournament.id, { sort_by: 'core_score_adj', funnel, baseline_kind: seasonBaseline, limit: 200 }),
+    { keepPreviousData: true }
+  );
+
+  const { data: posByPosData, isLoading: posByPosLoading } = useQuery(
+    ['season-top-position', tournament.id, sortBy, funnel, seasonBaseline],
+    () => apiService.getSeasonTopByPosition(tournament.id, { sort_by: sortBy, funnel, baseline_kind: seasonBaseline, limit_per_position: 10 }),
+    { enabled: showPositions, keepPreviousData: true }
+  );
+
+  useEffect(() => { setPage(1); }, [localSort, localSortDir, funnel, seasonBaseline]);
+
+  const needsRecompute = flatData?.needs_recompute === true || posByPosData?.needs_recompute === true;
+  const allPlayers: any[] = flatData?.data || [];
+
+  const sorted = [...allPlayers].sort((a, b) => {
+    const va = a[localSort] ?? -1;
+    const vb = b[localSort] ?? -1;
+    return localSortDir === 'desc' ? vb - va : va - vb;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / SEASON_PAGE_SIZE));
+  const paginated = sorted.slice((page - 1) * SEASON_PAGE_SIZE, page * SEASON_PAGE_SIZE);
+
+  const handleColumnSort = (key: string) => {
+    if (localSort === key) {
+      setLocalSortDir(prev => prev === 'desc' ? 'asc' : 'desc');
+    } else {
+      setLocalSort(key);
+      setLocalSortDir('desc');
+    }
+  };
+
+  const SeasonSortIcon = ({ col }: { col: string }) => {
+    if (localSort !== col) return <ArrowsUpDownIcon className="w-3 h-3 ml-0.5 text-gray-300" />;
+    return localSortDir === 'desc'
+      ? <ArrowDownIcon className="w-3 h-3 ml-0.5 text-purple-600" />
+      : <ArrowUpIcon className="w-3 h-3 ml-0.5 text-purple-600" />;
+  };
+
+  const positions: Record<string, any> = posByPosData?.data || {};
+  const positionGroups: Record<string, string[]> = { ATT: [], MID: [], DEF: [] };
+  Object.entries(positions).forEach(([code, pos]: [string, any]) => {
+    const group = pos.position_group || 'DEF';
+    if (!positionGroups[group]) positionGroups[group] = [];
+    positionGroups[group].push(code);
+  });
+
+  const GROUP_LABELS: Record<string, string> = { ATT: 'Атака', MID: 'Полузащита', DEF: 'Защита' };
+  const GROUP_COLORS: Record<string, string> = {
+    ATT: 'border-red-200 bg-red-50/30',
+    MID: 'border-blue-200 bg-blue-50/30',
+    DEF: 'border-green-200 bg-green-50/30',
+  };
+
+  const handleRecompute = async () => {
+    setRecomputing(true);
+    try {
+      await apiService.recomputeSeasonAnalysis(tournament.id);
+      refetch();
+      refetchBenchmark();
+    } catch (e: any) {
+      alert('Ошибка: ' + (e?.response?.data?.detail || e?.message || 'unknown'));
+    } finally {
+      setRecomputing(false);
+    }
+  };
+
+  const handleBenchmarkUpload = async (file: File) => {
+    setBenchmarkUploading(true);
+    try {
+      const label = benchmarkLabel.trim() || file.name.replace(/\.(xlsx|xls)$/i, '');
+      await apiService.uploadBenchmark(tournament.id, file, label);
+      setBenchmarkLabel('');
+      setShowBenchmarkUpload(false);
+      refetchBenchmark();
+      alert('Эталон загружен. Нажмите «Пересчитать» чтобы обновить рейтинг.');
+    } catch (e: any) {
+      alert('Ошибка загрузки: ' + (e?.response?.data?.detail || e?.message || 'unknown'));
+    } finally {
+      setBenchmarkUploading(false);
+    }
+  };
+
+  const handleDeleteBenchmark = async () => {
+    if (!window.confirm('Удалить эталонный сезон?')) return;
+    try {
+      await apiService.deleteBenchmark(tournament.id);
+      refetchBenchmark();
+      if (seasonBaseline === 'SEASON_BENCHMARK') setSeasonBaseline('SEASON');
+    } catch (e: any) {
+      alert('Ошибка: ' + (e?.response?.data?.detail || e?.message || 'unknown'));
+    }
+  };
+
+  const benchmarkData = benchmarkInfo?.data;
+  const isLoading = flatLoading;
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <Button variant="secondary" size="sm" onClick={onBack}>
+            <ArrowLeftIcon className="w-4 h-4 mr-2" />
+            Назад к разделам
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 flex items-center">
+              <ChartBarIcon className="w-6 h-6 mr-2 text-purple-500" />
+              Топ по позициям за сезон
+            </h1>
+            <p className="text-gray-600">
+              {tournament.full_name} — стабильность на дистанции (PER90 за весь сезон)
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={handleRecompute}
+          disabled={recomputing}
+          className="px-4 py-2 bg-purple-500 text-white rounded-lg text-sm font-medium hover:bg-purple-600 disabled:opacity-50 transition-colors"
+        >
+          {recomputing ? 'Пересчёт...' : 'Пересчитать'}
+        </button>
+      </div>
+
+      {/* Controls */}
+      <Card>
+        <CardContent>
+          <div className="flex flex-wrap gap-3 items-center">
+            {/* Season baseline selector */}
+            <div className="flex bg-gray-100 rounded-lg p-0.5">
+              {SEASON_BASELINE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setSeasonBaseline(opt.value)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${seasonBaseline === opt.value ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Sort */}
+            <div className="flex bg-gray-100 rounded-lg p-0.5">
+              {SORT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setSortBy?.(opt.value)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${sortBy === opt.value ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Funnel */}
+            <div className="flex bg-gray-100 rounded-lg p-0.5">
+              {FUNNEL_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setFunnel?.(opt.value)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${funnel === opt.value ? 'bg-white text-purple-600 shadow' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Toggle: top by position */}
+            <button
+              onClick={() => setShowPositions(!showPositions)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1 ${
+                showPositions
+                  ? 'text-purple-800 bg-purple-200 hover:bg-purple-300'
+                  : 'text-purple-700 bg-purple-100 hover:bg-purple-200'
+              }`}
+            >
+              <ChartBarIcon className="w-3.5 h-3.5" />
+              Топ по позициям
+            </button>
+
+            <span className="text-xs text-gray-400 ml-2">
+              {seasonBaseline === 'SEASON_BENCHMARK'
+                ? `Эталон: ${benchmarkData?.label || 'не загружен'}`
+                : 'Данные: среднее за 90 мин за весь сезон'
+              }
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Benchmark info/upload bar */}
+      {seasonBaseline === 'SEASON_BENCHMARK' && (
+        <Card className="border-indigo-200 bg-indigo-50/30">
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center">
+                  <StarIcon className="w-4 h-4 text-indigo-600" />
+                </div>
+                {benchmarkData ? (
+                  <div>
+                    <p className="text-sm font-medium text-indigo-900">{benchmarkData.label}</p>
+                    <p className="text-xs text-indigo-500">
+                      Загружен: {benchmarkData.uploaded_at ? new Date(benchmarkData.uploaded_at).toLocaleDateString('ru-RU') : '—'}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-indigo-700">Эталонный сезон не загружен. Загрузите файл PER90 для сравнения.</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {benchmarkData && (
+                  <button
+                    onClick={handleDeleteBenchmark}
+                    className="px-2.5 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+                  >
+                    <TrashIcon className="w-3.5 h-3.5 inline mr-1" />
+                    Удалить
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowBenchmarkUpload(!showBenchmarkUpload)}
+                  className="px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-lg transition-colors flex items-center gap-1"
+                >
+                  <CloudArrowUpIcon className="w-3.5 h-3.5" />
+                  {benchmarkData ? 'Заменить' : 'Загрузить эталон'}
+                </button>
+              </div>
+            </div>
+
+            {/* Upload form */}
+            {showBenchmarkUpload && (
+              <div className="mt-3 pt-3 border-t border-indigo-200">
+                <div className="flex items-end gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-indigo-700 mb-1">Название эталона (необязательно)</label>
+                    <input
+                      type="text"
+                      value={benchmarkLabel}
+                      onChange={(e) => setBenchmarkLabel(e.target.value)}
+                      placeholder="Например: МФЛ 2024"
+                      className="w-full px-3 py-1.5 text-sm border border-indigo-200 rounded-lg bg-white focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      ref={benchmarkFileRef}
+                      type="file"
+                      accept=".xlsx,.xls"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleBenchmarkUpload(f);
+                        e.target.value = '';
+                      }}
+                    />
+                    <button
+                      onClick={() => benchmarkFileRef.current?.click()}
+                      disabled={benchmarkUploading}
+                      className="px-4 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {benchmarkUploading ? 'Загрузка...' : 'Выбрать файл .xlsx'}
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-indigo-400 mt-1.5">
+                  Файл должен содержать данные PER90 за сезон. Если не указать название — будет использовано имя файла.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ===== Content: Flat Table OR Top by Position ===== */}
+      {!showPositions ? (
+      <Card>
+        <CardHeader className="bg-purple-50/50">
+          <CardTitle className="flex items-center justify-between">
+            <span className="flex items-center">
+              <ChartBarIcon className="w-5 h-5 mr-2 text-purple-600" />
+              Сезон &middot; {sorted.length} игроков
+            </span>
+            <span className="text-xs font-normal text-gray-500">
+              Стр. {page}/{totalPages}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-16 text-gray-500">
+              <svg className="animate-spin h-6 w-6 text-purple-500 mr-2" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Загрузка...
+            </div>
+          ) : (sorted.length === 0 || needsRecompute) ? (
+            <div className="text-center py-16 text-gray-500">
+              <div className="w-16 h-16 mx-auto mb-4 bg-purple-100 rounded-full flex items-center justify-center">
+                <ChartBarIcon className="w-8 h-8 text-purple-500" />
+              </div>
+              <p className="text-lg font-medium text-gray-700 mb-2">
+                {needsRecompute ? 'Сезонный анализ не рассчитан' : 'Нет данных'}
+              </p>
+              <p className="mb-6 max-w-md mx-auto">
+                Загрузите PER90 данные за сезон и нажмите «Пересчитать» для расчёта рейтинга.
+              </p>
+              <button
+                onClick={handleRecompute}
+                disabled={recomputing}
+                className="px-4 py-2 bg-purple-500 text-white rounded-lg text-sm font-medium hover:bg-purple-600 disabled:opacity-50 transition-colors"
+              >
+                {recomputing ? 'Расчёт...' : 'Пересчитать сезонный анализ'}
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-purple-50 border-b border-purple-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 w-8">#</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Игрок</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Команда</th>
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600">Поз</th>
+                      {BEST_SORTABLE_COLUMNS.map((col) => (
+                        <th
+                          key={col.key}
+                          onClick={() => handleColumnSort(col.key)}
+                          className="px-3 py-2 text-right text-xs font-semibold text-gray-600 cursor-pointer hover:text-purple-600 select-none whitespace-nowrap"
+                        >
+                          <span className="inline-flex items-center">
+                            {col.label}
+                            <SeasonSortIcon col={col.key} />
+                          </span>
+                        </th>
+                      ))}
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Risk</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {paginated.map((p: any, idx: number) => (
+                      <tr
+                        key={p.player_id}
+                        onClick={() => onPlayerClick(p.player_id)}
+                        className="hover:bg-purple-50 cursor-pointer transition-colors"
+                      >
+                        <td className="px-3 py-2 text-sm text-gray-400 w-8">{(page - 1) * SEASON_PAGE_SIZE + idx + 1}</td>
+                        <td className="px-3 py-2 text-sm font-medium text-blue-600 hover:underline">{p.full_name}</td>
+                        <td className="px-3 py-2 text-sm text-gray-600">{p.team_name}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-purple-100 text-purple-800">{p.position_code}</span>
+                        </td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums"><ScoreCell value={p.core_score_adj} /></td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums"><ScoreCell value={p.support_score_adj} /></td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold"><ScoreCell value={p.total_score} /></td>
+                        <td className="px-3 py-2 text-sm text-right tabular-nums"><ScoreCell value={p.good_share_core} /></td>
+                        <td className="px-3 py-2"><RiskBadges flags={p.risk_flags} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
+                  <button
+                    onClick={() => setPage(Math.max(1, page - 1))}
+                    disabled={page <= 1}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeftIcon className="w-4 h-4 inline mr-1" />
+                    Назад
+                  </button>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                      let pageNum: number;
+                      if (totalPages <= 7) {
+                        pageNum = i + 1;
+                      } else if (page <= 4) {
+                        pageNum = i + 1;
+                      } else if (page >= totalPages - 3) {
+                        pageNum = totalPages - 6 + i;
+                      } else {
+                        pageNum = page - 3 + i;
+                      }
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setPage(pageNum)}
+                          className={`w-8 h-8 text-sm font-medium rounded-md transition-colors ${
+                            page === pageNum
+                              ? 'bg-purple-500 text-white'
+                              : 'text-gray-600 hover:bg-gray-100'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => setPage(Math.min(totalPages, page + 1))}
+                    disabled={page >= totalPages}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Далее
+                    <ChevronRightIcon className="w-4 h-4 inline ml-1" />
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+      ) : (
+      /* ===== Top by Position (replaces table) ===== */
+        posByPosLoading ? (
+          <div className="flex items-center justify-center py-12 text-gray-500">
+            <svg className="animate-spin h-6 w-6 text-purple-500 mr-2" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Загрузка позиций...
+          </div>
+        ) : Object.keys(positions).length === 0 ? (
+          <Card>
+            <CardContent>
+              <div className="text-center py-8 text-gray-500">Нет данных по позициям за сезон</div>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+          {['ATT', 'MID', 'DEF'].map((group) => {
+            const posCodes = positionGroups[group] || [];
+            if (posCodes.length === 0) return null;
+            return (
+              <div key={group} className="space-y-3 mb-4">
+                <h2 className="text-lg font-semibold text-gray-800">{GROUP_LABELS[group]}</h2>
+                {posCodes.map((posCode) => {
+                  const pos = positions[posCode];
+                  if (!pos) return null;
+                  return (
+                    <Card key={posCode} className={`border ${GROUP_COLORS[group]}`}>
+                      <CardHeader>
+                        <CardTitle className="text-sm">
+                          {pos.position_name} ({pos.position_code}) — {(pos.players || []).length} игроков
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-0">
+                        <table className="w-full">
+                          <thead className="bg-gray-50/80">
+                            <tr>
+                              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600">#</th>
+                              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600">Игрок</th>
+                              <th className="px-3 py-1.5 text-left text-xs font-semibold text-gray-600">Команда</th>
+                              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600">Core</th>
+                              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600">Support</th>
+                              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600">Total</th>
+                              <th className="px-3 py-1.5 text-right text-xs font-semibold text-gray-600">Good%</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {(pos.players || []).map((p: any) => (
+                              <tr
+                                key={p.player_id}
+                                onClick={() => onPlayerClick(p.player_id)}
+                                className="hover:bg-white cursor-pointer transition-colors"
+                              >
+                                <td className="px-3 py-1.5 text-sm text-gray-400">{p.rank}</td>
+                                <td className="px-3 py-1.5 text-sm font-medium text-blue-600 hover:underline">
+                                  {p.full_name}
+                                  {p.position_detail && (
+                                    <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-500">{p.position_detail}</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-1.5 text-sm text-gray-600">{p.team_name}</td>
+                                <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.core_score_adj} /></td>
+                                <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.support_score_adj} /></td>
+                                <td className="px-3 py-1.5 text-sm text-right tabular-nums font-semibold"><ScoreCell value={p.total_score} /></td>
+                                <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.good_share_core} /></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            );
+          })}
+          </>
+        )
+      )}
+    </div>
   );
 };

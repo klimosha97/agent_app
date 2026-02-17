@@ -2,7 +2,7 @@
  * Главный компонент приложения
  */
 
-import React, { useState, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { ReactQueryDevtools } from 'react-query/devtools';
 
@@ -109,9 +109,24 @@ const tabs: Tab[] = [
   },
 ];
 
+const VALID_TABS: TabId[] = ['my-players', 'tournaments', 'tracked-players', 'top-performers', 'database'];
+
 function App() {
-  const [activeTab, setActiveTab] = useState<TabId>('database');
-  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<TabId>(() => {
+    const saved = sessionStorage.getItem('app_activeTab');
+    if (saved && VALID_TABS.includes(saved as TabId)) return saved as TabId;
+    return 'database';
+  });
+  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(() => {
+    const saved = sessionStorage.getItem('app_playerId');
+    return saved ? Number(saved) : null;
+  });
+
+  useEffect(() => { sessionStorage.setItem('app_activeTab', activeTab); }, [activeTab]);
+  useEffect(() => {
+    if (selectedPlayerId !== null) sessionStorage.setItem('app_playerId', String(selectedPlayerId));
+    else sessionStorage.removeItem('app_playerId');
+  }, [selectedPlayerId]);
 
   // Находим активную вкладку
   const currentTab = tabs.find((tab) => tab.id === activeTab);

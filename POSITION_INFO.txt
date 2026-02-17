@@ -36,13 +36,13 @@
 - risk: fouls, yellow_cards, red_cards, losses_own_half
 
 АП Л (Атакующий полузащитник левый)
-- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles
-- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles_success_pct, progressive_passes, offensive_duels_success_pct
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles, offensive_duels_success_pct, crosses, crosses_accurate_pct, final_third_entries_dribble
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles_success_pct, progressive_passes, duels_success_pct, tackles
 - risk: fouls, yellow_cards, red_cards, losses_own_half
 
 АП П (Атакующий полузащитник правый)
-- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles
-- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles_success_pct, progressive_passes, offensive_duels_success_pct
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles, offensive_duels_success_pct, crosses, crosses_accurate_pct, final_third_entries_dribble
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles_success_pct, progressive_passes, duels_success_pct, tackles
 - risk: fouls, yellow_cards, red_cards, losses_own_half
 
 АП ЛЦ (Атакующий полузащитник левоцентральный)
@@ -65,14 +65,14 @@
 - risk: gross_errors, fouls, yellow_cards, red_cards, losses_own_half
 
 П Л (Полузащитник левый)
-- core: crosses, crosses_accurate_pct, progressive_passes, carries, dribbles, dribbles_success_pct, passes_to_final_third, key_passes, final_third_entries_dribble, goal_chances_created
-- support: final_third_entries, passes_to_penalty_area, duels_success_pct, tackles, offensive_duels_success_pct
-- risk: fouls, yellow_cards, red_cards, gross_errors, dribbles_unsuccessful, losses_own_half
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles, offensive_duels_success_pct, crosses, crosses_accurate_pct, final_third_entries_dribble
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles_success_pct, progressive_passes, duels_success_pct, tackles
+- risk: fouls, yellow_cards, red_cards, losses_own_half
 
 П П (Полузащитник правый)
-- core: crosses, crosses_accurate_pct, progressive_passes, carries, dribbles, dribbles_success_pct, passes_to_final_third, key_passes, final_third_entries_dribble, goal_chances_created
-- support: final_third_entries, passes_to_penalty_area, duels_success_pct, tackles, offensive_duels_success_pct
-- risk: fouls, yellow_cards, red_cards, gross_errors, dribbles_unsuccessful, losses_own_half
+- core: assists, xa, key_passes, passes_for_shot, goal_chances_created, passes_to_final_third, passes_to_penalty_area, final_third_entries, dribbles, offensive_duels_success_pct, crosses, crosses_accurate_pct, final_third_entries_dribble
+- support: shots, shots_on_target, xg, goal_chances_success, fouls_on_player, passes_for_shot, dribbles_success_pct, progressive_passes, duels_success_pct, tackles
+- risk: fouls, yellow_cards, red_cards, losses_own_half
 
 П ЛЦ (Полузащитник левоцентральный)
 - core: key_passes, passes_accurate_pct, progressive_passes, passes_to_final_third, duels_success_pct, tackles, duels, dribbles, final_third_entries, final_third_entries_dribble
@@ -119,12 +119,12 @@
 
 З Л (Защитник левый)
 - core: crosses, crosses_accurate_pct, passes_to_final_third, key_passes, duels_success_pct, tackles, tackles_success_pct, progressive_passes, duels_success, offensive_duels_success_pct, interceptions
-- support: final_third_entries, passes_to_penalty_area, offensive_duels_success_pct,  goal_chances_created, final_third_entries_dribble, assists, duels_success_pct, dribbles, dribbles_success_pct
+- support: final_third_entries, passes_to_penalty_area, goal_chances_created, final_third_entries_dribble, assists, dribbles, dribbles_success_pct
 - risk: fouls, yellow_cards, red_cards, gross_errors, dribbles_unsuccessful, losses_own_half
 
 З П (Защитник правый)
 - core: crosses, crosses_accurate_pct, passes_to_final_third, key_passes, duels_success_pct, tackles, tackles_success_pct, progressive_passes, duels_success, offensive_duels_success_pct, interceptions
-- support: final_third_entries, passes_to_penalty_area, offensive_duels_success_pct,  goal_chances_created, final_third_entries_dribble, assists, duels_success_pct, dribbles, dribbles_success_pct
+- support: final_third_entries, passes_to_penalty_area, goal_chances_created, final_third_entries_dribble, assists, dribbles, dribbles_success_pct
 - risk: fouls, yellow_cards, red_cards, gross_errors, dribbles_unsuccessful, losses_own_half
 
 З ЛЦ (Защитник левоцентральный)

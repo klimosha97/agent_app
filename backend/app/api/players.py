@@ -356,10 +356,19 @@ async def clear_database(db: Session = Depends(get_db)):
     Турниры и справочники остаются.
     """
     try:
-        # Очищаем таблицы
+        # Очищаем аналитические таблицы (могут быть не созданы ещё)
+        for tbl in ('round_scores', 'round_percentiles', 'benchmark_slices', 'team_tiers'):
+            exists = db.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = :t)"
+            ), {"t": tbl}).scalar()
+            if exists:
+                db.execute(text(f"TRUNCATE TABLE {tbl} CASCADE"))
+        # Очищаем основные таблицы
         db.execute(text("TRUNCATE TABLE player_statistics CASCADE"))
         db.execute(text("TRUNCATE TABLE stat_slices CASCADE"))
         db.execute(text("TRUNCATE TABLE players CASCADE"))
+        # Сбрасываем current_round у всех турниров (данные удалены)
+        db.execute(text("UPDATE tournaments SET current_round = 0"))
         db.commit()
         
         logger.info("✅ Database cleared successfully")

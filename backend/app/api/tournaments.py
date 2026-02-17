@@ -28,7 +28,14 @@ async def get_tournaments(db: Session = Depends(get_db)):
                 t.short_code as code,
                 COALESCE(t.current_round, 0) as current_round,
                 t.updated_at as last_update,
-                COUNT(DISTINCT p.player_id) as players_count
+                COUNT(DISTINCT p.player_id) as players_count,
+                (
+                    SELECT MAX(CAST(ss.period_value AS INTEGER))
+                    FROM stat_slices ss
+                    WHERE ss.tournament_id = t.id
+                      AND ss.period_type = 'ROUND'
+                      AND ss.period_value ~ '^\d+$'
+                ) as last_loaded_round
             FROM tournaments t
             LEFT JOIN players p ON p.tournament_id = t.id
             GROUP BY t.id, t.name, t.full_name, t.short_code, t.current_round, t.updated_at
@@ -37,15 +44,21 @@ async def get_tournaments(db: Session = Depends(get_db)):
         
         tournaments = []
         for row in result:
+            # last_loaded_round из stat_slices (реальные данные) — приоритет
+            # Если нет загруженных туров — берём current_round только если есть игроки
+            last_loaded = row[7]  # может быть None
+            db_current = row[4] or 0
+            players_count = row[6] or 0
+            actual_round = last_loaded if last_loaded else (db_current if players_count > 0 else 0)
             tournaments.append({
                 "id": row[0],
                 "name": row[1],
                 "full_name": row[2],
                 "code": row[3],
-                "current_round": row[4] or 0,
+                "current_round": actual_round,
                 "last_update": row[5].isoformat() if row[5] else None,
                 "players_count": row[6] or 0,
-                "round_players_count": 0  # TODO: подсчёт игроков последнего тура
+                "round_players_count": 0
             })
         
         return {

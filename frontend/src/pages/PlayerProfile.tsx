@@ -3,6 +3,7 @@
  * Показывает полную статистику игрока с возможностью переключения:
  * - TOTAL / PER90
  * - SEASON / ROUND (выбор конкретного тура)
+ * + Раздел перцентилей по позиции (сезон + тур)
  */
 
 import React, { useState, useEffect } from 'react';
@@ -15,7 +16,8 @@ import {
   TrophyIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  FlagIcon
+  FlagIcon,
+  ChartBarIcon
 } from '@heroicons/react/24/outline';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -47,6 +49,8 @@ export const PlayerProfile: React.FC<PlayerProfileProps> = ({ playerId, onBack }
   const [sliceType, setSliceType] = useState<'TOTAL' | 'PER90'>('TOTAL');
   const [periodType, setPeriodType] = useState<'SEASON' | 'ROUND'>('SEASON');
   const [selectedRound, setSelectedRound] = useState<number | null>(null);
+  // Перцентили: выбранный тур
+  const [pctRound, setPctRound] = useState<number | undefined>(undefined);
 
   // Загружаем базовую информацию об игроке
   const { data: playerInfo, isLoading: isLoadingInfo } = useQuery(
@@ -77,12 +81,26 @@ export const PlayerProfile: React.FC<PlayerProfileProps> = ({ playerId, onBack }
     }
   );
 
+  // Загружаем перцентили по позиции
+  const { data: pctData, isLoading: isLoadingPct } = useQuery(
+    ['player-percentiles', playerId, pctRound],
+    () => apiService.getPlayerPercentiles(playerId, pctRound),
+    { enabled: !!playerId, keepPreviousData: true }
+  );
+
   // Устанавливаем последний тур по умолчанию при загрузке
   useEffect(() => {
     if (availableSlices?.slices?.rounds?.length && selectedRound === null) {
       setSelectedRound(availableSlices.slices.rounds[0]);
     }
   }, [availableSlices, selectedRound]);
+
+  // Устанавливаем последний доступный тур для перцентилей
+  useEffect(() => {
+    if (pctData?.available_rounds?.length && pctRound === undefined) {
+      setPctRound(pctData.available_rounds[0]); // первый = последний (DESC)
+    }
+  }, [pctData, pctRound]);
 
   const player = playerInfo?.data;
   const stats = statsData?.stats_detailed || [];
@@ -303,6 +321,15 @@ export const PlayerProfile: React.FC<PlayerProfileProps> = ({ playerId, onBack }
         </CardContent>
       </Card>
 
+      {/* ===== Перцентили по позиции (сверху!) ===== */}
+      <PercentileSection
+        pctData={pctData}
+        isLoading={isLoadingPct}
+        pctRound={pctRound}
+        setPctRound={setPctRound}
+        formatValue={formatValue}
+      />
+
       {/* Статистика по категориям */}
       {isLoadingStats ? (
         <Card>
@@ -409,6 +436,260 @@ export const PlayerProfile: React.FC<PlayerProfileProps> = ({ playerId, onBack }
             ))}
         </div>
       )}
+
+    </div>
+  );
+};
+
+
+// =====================================================================
+// Компонент: визуализация перцентилей по позиции
+// =====================================================================
+
+const BUCKET_LABELS: Record<string, string> = { core: 'Core', support: 'Support', risk: 'Risk' };
+const BUCKET_COLORS: Record<string, { bar: string; bg: string; text: string; header: string }> = {
+  core: { bar: 'bg-blue-500', bg: 'bg-blue-50', text: 'text-blue-700', header: 'bg-blue-50 border-blue-200' },
+  support: { bar: 'bg-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700', header: 'bg-emerald-50 border-emerald-200' },
+  risk: { bar: 'bg-orange-400', bg: 'bg-orange-50', text: 'text-orange-700', header: 'bg-orange-50 border-orange-200' },
+};
+
+function pctColor(p: number | null): string {
+  if (p === null || p === undefined) return 'text-gray-400';
+  if (p >= 0.90) return 'text-emerald-600 font-bold';
+  if (p >= 0.80) return 'text-emerald-600';
+  if (p >= 0.60) return 'text-blue-600';
+  if (p >= 0.40) return 'text-gray-600';
+  return 'text-red-500';
+}
+
+function pctBarColor(p: number | null): string {
+  if (p === null || p === undefined) return 'bg-gray-200';
+  if (p >= 0.90) return 'bg-emerald-500';
+  if (p >= 0.80) return 'bg-emerald-400';
+  if (p >= 0.60) return 'bg-blue-400';
+  if (p >= 0.40) return 'bg-yellow-400';
+  return 'bg-red-400';
+}
+
+interface PercentileSectionProps {
+  pctData: any;
+  isLoading: boolean;
+  pctRound: number | undefined;
+  setPctRound: (r: number | undefined) => void;
+  formatValue: (v: number | null, dt: string) => string;
+}
+
+const PercentileSection: React.FC<PercentileSectionProps> = ({
+  pctData, isLoading, pctRound, setPctRound, formatValue,
+}) => {
+  const [activeTab, setActiveTab] = useState<'season' | 'round'>('season');
+
+  if (!pctData && !isLoading) return null;
+
+  const seasonData = pctData?.season;
+  const roundData = pctData?.round;
+  const availableRounds: number[] = pctData?.available_rounds || [];
+  const posInfo = pctData?.player;
+
+  const currentBaseline = activeTab === 'season' ? seasonData : roundData;
+
+  // Group metrics by bucket
+  const metricsByBucket: Record<string, any[]> = { core: [], support: [], risk: [] };
+  if (currentBaseline?.metrics) {
+    currentBaseline.metrics.forEach((m: any) => {
+      if (metricsByBucket[m.bucket]) {
+        metricsByBucket[m.bucket].push(m);
+      }
+    });
+  }
+
+  const scores = currentBaseline?.scores;
+
+  return (
+    <Card className="border-purple-200">
+      <CardHeader className="bg-gradient-to-r from-purple-50 to-indigo-50">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-lg flex items-center">
+              <ChartBarIcon className="w-5 h-5 mr-2 text-purple-500" />
+              Перцентили по позиции
+              {posInfo && (
+                <span className="ml-2 px-2 py-0.5 text-xs font-medium rounded bg-purple-100 text-purple-700">
+                  {posInfo.position_code}
+                </span>
+              )}
+            </CardTitle>
+            <p className="text-xs text-gray-500 mt-1">
+              {activeTab === 'season'
+                ? 'Сравнение PER90 за весь сезон со всеми игроками позиции'
+                : `Сравнение показателей тура ${pctRound} с PER90 сезона`}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Tabs: Season / Round */}
+            <div className="flex bg-white rounded-lg p-0.5 shadow-sm border">
+              <button
+                onClick={() => setActiveTab('season')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  activeTab === 'season' ? 'bg-purple-500 text-white shadow' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                За сезон
+              </button>
+              <button
+                onClick={() => { setActiveTab('round'); if (!pctRound && availableRounds.length) setPctRound(availableRounds[0]); }}
+                disabled={availableRounds.length === 0}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                  activeTab === 'round' ? 'bg-amber-500 text-white shadow' : 'text-gray-600 hover:text-gray-900'
+                } disabled:opacity-40`}
+              >
+                За тур
+              </button>
+            </div>
+
+            {/* Round selector */}
+            {activeTab === 'round' && availableRounds.length > 0 && (
+              <select
+                value={pctRound || ''}
+                onChange={(e) => setPctRound(Number(e.target.value))}
+                className="px-3 py-1.5 border border-amber-300 rounded-lg bg-amber-50 text-amber-800 font-bold text-xs focus:ring-2 focus:ring-amber-500 cursor-pointer"
+              >
+                {availableRounds.map((r) => (
+                  <option key={r} value={r}>Тур {r}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12 text-gray-500">
+            <svg className="animate-spin h-6 w-6 text-purple-500 mr-2" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Загрузка перцентилей...
+          </div>
+        ) : !currentBaseline ? (
+          <div className="text-center py-12 text-gray-500">
+            <p className="text-sm">
+              {activeTab === 'season'
+                ? 'Нет сезонных перцентилей. Загрузите PER90 данные и пересчитайте анализ.'
+                : 'Нет данных за этот тур. Выберите другой тур или загрузите данные.'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* Insufficient minutes warning */}
+            {scores?.insufficient_minutes && (
+              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm font-medium">
+                <svg className="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
+                </svg>
+                Без оценки — менее 200 минут за сезон. Перцентили отображены, но не учитываются в рейтингах.
+              </div>
+            )}
+            {/* Score summary */}
+            {scores && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <ScoreTile label="Core" value={scores.core_score_adj} color="blue" />
+                <ScoreTile label="Support" value={scores.support_score_adj} color="emerald" />
+                <ScoreTile label="Total" value={scores.total_score} color="purple" />
+                <ScoreTile label="Good%" value={scores.good_share_core} color="amber" />
+              </div>
+            )}
+
+            {/* Metrics by bucket */}
+            {['core', 'support', 'risk'].map((bucket) => {
+              const items = metricsByBucket[bucket];
+              if (!items || items.length === 0) return null;
+              const colors = BUCKET_COLORS[bucket];
+
+              return (
+                <div key={bucket}>
+                  <h3 className={`text-sm font-semibold mb-2 px-2 py-1 rounded ${colors.header} border`}>
+                    {BUCKET_LABELS[bucket]} ({items.length} метрик)
+                  </h3>
+                  <div className="space-y-1">
+                    {items.map((m: any) => (
+                      <div key={m.metric_code} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded transition-colors">
+                        {/* Metric name */}
+                        <span className="text-sm text-gray-700 w-44 flex-shrink-0 truncate" title={m.display_name}>
+                          {m.display_name}
+                        </span>
+                        {/* Value */}
+                        <span className="text-sm tabular-nums text-gray-500 w-16 text-right flex-shrink-0">
+                          {m.value !== null && m.value !== undefined
+                            ? formatValue(m.value, m.data_type || 'FLOAT')
+                            : '—'}
+                        </span>
+                        {/* Percentile bar */}
+                        <div className="flex-1 h-4 bg-gray-100 rounded-full overflow-hidden relative">
+                          {m.percentile !== null && m.percentile !== undefined ? (
+                            <div
+                              className={`h-full rounded-full transition-all ${pctBarColor(m.percentile)}`}
+                              style={{ width: `${Math.max(2, m.percentile * 100)}%` }}
+                            />
+                          ) : (
+                            <div className="h-full w-0" />
+                          )}
+                          {/* 80% marker */}
+                          <div className="absolute top-0 bottom-0 left-[80%] w-px bg-gray-300" />
+                        </div>
+                        {/* Percentile number */}
+                        <span className={`text-sm font-medium tabular-nums w-10 text-right flex-shrink-0 ${pctColor(m.percentile)}`}>
+                          {m.percentile !== null && m.percentile !== undefined
+                            ? Math.round(m.percentile * 100)
+                            : '—'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Coverage info */}
+            {scores && (
+              <div className="flex gap-4 text-xs text-gray-400 pt-2 border-t">
+                <span>Core coverage: {Math.round((scores.core_coverage || 0) * 100)}%</span>
+                <span>Support coverage: {Math.round((scores.support_coverage || 0) * 100)}%</span>
+                {scores.insufficient_data && (
+                  <span className="text-orange-500 font-medium">⚠ Недостаточно данных</span>
+                )}
+                {scores.insufficient_minutes && (
+                  <span className="text-red-500 font-medium">⚠ Без оценки (менее 200 мин)</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+
+// Score tile для суммарных показателей
+const ScoreTile: React.FC<{ label: string; value: number | null; color: string }> = ({ label, value, color }) => {
+  const v = value !== null && value !== undefined ? Math.round(value * 100) : null;
+  const colorMap: Record<string, { bg: string; text: string; ring: string }> = {
+    blue: { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-200' },
+    emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-200' },
+    purple: { bg: 'bg-purple-50', text: 'text-purple-700', ring: 'ring-purple-200' },
+    amber: { bg: 'bg-amber-50', text: 'text-amber-700', ring: 'ring-amber-200' },
+  };
+  const c = colorMap[color] || colorMap.blue;
+
+  return (
+    <div className={`rounded-lg ${c.bg} ring-1 ${c.ring} px-3 py-2 text-center`}>
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className={`text-xl font-bold ${c.text} tabular-nums`}>
+        {v !== null ? v : '—'}
+      </div>
     </div>
   );
 };
