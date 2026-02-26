@@ -6,12 +6,18 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useQuery } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { apiService } from '../services/api';
+import { usePlayerNavigation } from '../App';
 import {
   XMarkIcon,
   ExclamationTriangleIcon,
   ChartBarIcon,
+  TableCellsIcon,
+  UserPlusIcon,
+  EyeIcon,
+  CheckCircleIcon,
+  ArrowsPointingOutIcon,
 } from '@heroicons/react/24/outline';
 
 interface Props {
@@ -70,19 +76,22 @@ export const PlayerComparisonCard: React.FC<Props> = ({
   playerId,
   mode = 'season',
 }) => {
-  // Top-level view: 'season', 'season_benchmark', or 'round'
-  const [activeView, setActiveView] = useState<'season' | 'season_benchmark' | 'round'>(mode);
-  // Round-level sub-baseline
-  const [activeRoundBaseline, setActiveRoundBaseline] = useState<string>('LEAGUE');
+  const { setSelectedPlayerId } = usePlayerNavigation();
+  // Level 1: season vs round
+  const [periodTab, setPeriodTab] = useState<'season' | 'round'>(mode === 'round' ? 'round' : 'season');
+  // Level 2: baseline within each period
+  const [seasonBaseline, setSeasonBaseline] = useState<string>('SEASON');
+  const [roundBaseline, setRoundBaseline] = useState<string>('LEAGUE');
   // Selected round for round view
   const [selectedRound, setSelectedRound] = useState<number>(roundNumber);
   const [showRisk, setShowRisk] = useState(true);
 
   // Reset when mode or player changes
   useEffect(() => {
-    setActiveView(mode);
+    setPeriodTab(mode === 'round' ? 'round' : 'season');
     setSelectedRound(roundNumber);
-    setActiveRoundBaseline('LEAGUE');
+    setSeasonBaseline('SEASON');
+    setRoundBaseline('LEAGUE');
   }, [mode, playerId, roundNumber]);
 
   // Fetch season + round percentiles (unified endpoint)
@@ -96,39 +105,82 @@ export const PlayerComparisonCard: React.FC<Props> = ({
   const { data: roundCompData, isLoading: roundCompLoading } = useQuery(
     ['player-comparison', tournamentId, selectedRound, playerId],
     () => apiService.getPlayerComparison(tournamentId, selectedRound, playerId),
-    { enabled: isOpen && playerId > 0 && activeView === 'round' && selectedRound > 0 }
+    { enabled: isOpen && playerId > 0 && periodTab === 'round' && selectedRound > 0 }
   );
 
   // Fetch history
-  const historyBaseline = activeView === 'round' ? activeRoundBaseline : (activeView === 'season_benchmark' ? 'SEASON_BENCHMARK' : 'SEASON');
+  const historyBaseline = periodTab === 'round' ? roundBaseline : seasonBaseline;
   const { data: historyData } = useQuery(
     ['player-history', tournamentId, playerId, historyBaseline],
     () => apiService.getPlayerHistory(tournamentId, playerId, historyBaseline),
     { enabled: isOpen && playerId > 0 }
   );
 
+  // Fetch raw stats (TOTAL + PER90 for season)
+  const { data: totalStatsData } = useQuery(
+    ['player-stats-total', playerId],
+    () => apiService.getPlayerStats(playerId, 'TOTAL', 'SEASON'),
+    { enabled: isOpen && playerId > 0 }
+  );
+  const { data: per90StatsData } = useQuery(
+    ['player-stats-per90', playerId],
+    () => apiService.getPlayerStats(playerId, 'PER90', 'SEASON'),
+    { enabled: isOpen && playerId > 0 }
+  );
+
+  const [statsView, setStatsView] = useState<'total' | 'per90'>('total');
+
+  const queryClient = useQueryClient();
+  const { data: watchStatus } = useQuery(
+    ['watch-status', playerId],
+    () => apiService.checkWatchedStatus(playerId),
+    { enabled: isOpen && playerId > 0 }
+  );
+
+  const addToList = useMutation(
+    (listType: 'MY' | 'TRACKED') => apiService.addWatchedPlayer(playerId, listType),
+    { onSuccess: () => { queryClient.invalidateQueries(['watch-status', playerId]); queryClient.invalidateQueries(['watched-players']); } }
+  );
+  const removeFromList = useMutation(
+    (listType: 'MY' | 'TRACKED') => apiService.removeWatchedPlayer(playerId, listType),
+    { onSuccess: () => { queryClient.invalidateQueries(['watch-status', playerId]); queryClient.invalidateQueries(['watched-players']); } }
+  );
+
   if (!isOpen) return null;
 
-  const isLoading = pctLoading || (activeView === 'round' && roundCompLoading);
+  const isLoading = pctLoading || (periodTab === 'round' && roundCompLoading);
 
   // Player info
   const player = pctData?.player || roundCompData?.player;
   const availableRounds: number[] = pctData?.available_rounds || [];
   const history = historyData?.data || [];
-  const hasBenchmark = !!pctData?.season_benchmark;
   const benchmarkLabel = pctData?.benchmark_label;
+
+  // Season baseline options (from unified percentiles endpoint)
+  const SEASON_BASELINE_MAP: Record<string, string> = { SEASON: 'season', TIER: 'season_tier', SEASON_BENCHMARK: 'season_benchmark' };
+  const seasonBaselineOptions = [
+    { key: 'SEASON', label: 'Вся лига', available: !!pctData?.season },
+    { key: 'TIER', label: 'По корзине', available: !!pctData?.season_tier },
+    { key: 'SEASON_BENCHMARK', label: 'Эталон', available: !!pctData?.season_benchmark },
+  ];
+
+  // Round baseline options (from round comparison endpoint)
+  const availableRoundBaselines = roundCompData?.baselines ? Object.keys(roundCompData.baselines) : [];
+  const roundBaselineOptions = [
+    { key: 'LEAGUE', label: 'Вся лига', available: availableRoundBaselines.includes('LEAGUE') },
+    { key: 'TIER', label: 'По корзине', available: availableRoundBaselines.includes('TIER') },
+    { key: 'BENCHMARK', label: 'Эталон', available: availableRoundBaselines.includes('BENCHMARK') },
+  ];
 
   // Determine current baseline data to show
   let currentData: any = null;
 
-  if (activeView === 'season') {
-    currentData = pctData?.season || null;
-  } else if (activeView === 'season_benchmark') {
-    currentData = pctData?.season_benchmark || null;
+  if (periodTab === 'season') {
+    const dataKey = SEASON_BASELINE_MAP[seasonBaseline] || 'season';
+    currentData = pctData?.[dataKey] || null;
   } else {
-    // Round view — use roundCompData baselines
     const baselines = roundCompData?.baselines || {};
-    currentData = baselines[activeRoundBaseline] || null;
+    currentData = baselines[roundBaseline] || null;
   }
 
   const scores = currentData?.scores;
@@ -143,7 +195,9 @@ export const PlayerComparisonCard: React.FC<Props> = ({
     }
   }
 
-  const roundBaselines = roundCompData?.baselines ? Object.keys(roundCompData.baselines) : [];
+  const activeBaselineOptions = periodTab === 'season' ? seasonBaselineOptions : roundBaselineOptions;
+  const activeBaselineKey = periodTab === 'season' ? seasonBaseline : roundBaseline;
+  const setActiveBaseline = periodTab === 'season' ? setSeasonBaseline : setRoundBaseline;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-8 overflow-y-auto">
@@ -162,9 +216,44 @@ export const PlayerComparisonCard: React.FC<Props> = ({
               <h2 className="text-xl font-bold text-gray-900">Загрузка...</h2>
             )}
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
-            <XMarkIcon className="w-5 h-5 text-gray-600" />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Мои футболисты */}
+            <button
+              onClick={() => watchStatus?.in_my ? removeFromList.mutate('MY') : addToList.mutate('MY')}
+              className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                watchStatus?.in_my
+                  ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                  : 'bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-600'
+              }`}
+              title={watchStatus?.in_my ? 'Убрать из моих' : 'Добавить в мои'}
+            >
+              {watchStatus?.in_my ? <CheckCircleIcon className="w-4 h-4" /> : <UserPlusIcon className="w-4 h-4" />}
+              Мой
+            </button>
+            {/* Отслеживаемые */}
+            <button
+              onClick={() => watchStatus?.in_tracked ? removeFromList.mutate('TRACKED') : addToList.mutate('TRACKED')}
+              className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                watchStatus?.in_tracked
+                  ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                  : 'bg-gray-100 text-gray-600 hover:bg-emerald-50 hover:text-emerald-600'
+              }`}
+              title={watchStatus?.in_tracked ? 'Убрать из отслеживаемых' : 'Добавить в отслеживаемые'}
+            >
+              {watchStatus?.in_tracked ? <CheckCircleIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+              Отслеж.
+            </button>
+            <button
+              onClick={() => { onClose(); setSelectedPlayerId(playerId); }}
+              className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+              title="Открыть на весь экран"
+            >
+              <ArrowsPointingOutIcon className="w-5 h-5 text-gray-600" />
+            </button>
+            <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
+              <XMarkIcon className="w-5 h-5 text-gray-600" />
+            </button>
+          </div>
         </div>
 
         {isLoading ? (
@@ -177,37 +266,24 @@ export const PlayerComparisonCard: React.FC<Props> = ({
           </div>
         ) : (
           <div className="p-6 space-y-5">
-            {/* ========== Top-level tabs: За сезон | Эталон | За тур ========== */}
+            {/* ========== Level 1: За сезон | За тур ========== */}
             <div className="flex items-center gap-3">
               <div className="flex bg-gray-100 rounded-lg p-0.5">
                 <button
-                  onClick={() => setActiveView('season')}
+                  onClick={() => setPeriodTab('season')}
                   className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
-                    activeView === 'season'
+                    periodTab === 'season'
                       ? 'bg-white text-blue-700 shadow'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
                   За сезон
                 </button>
-                {hasBenchmark && (
-                  <button
-                    onClick={() => setActiveView('season_benchmark')}
-                    className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
-                      activeView === 'season_benchmark'
-                        ? 'bg-white text-indigo-700 shadow'
-                        : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                    title={benchmarkLabel ? `Эталон: ${benchmarkLabel}` : 'Эталон'}
-                  >
-                    Эталон
-                  </button>
-                )}
                 <button
-                  onClick={() => setActiveView('round')}
+                  onClick={() => setPeriodTab('round')}
                   className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
-                    activeView === 'round'
-                      ? 'bg-white text-blue-700 shadow'
+                    periodTab === 'round'
+                      ? 'bg-white text-amber-700 shadow'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
@@ -215,8 +291,8 @@ export const PlayerComparisonCard: React.FC<Props> = ({
                 </button>
               </div>
 
-              {/* Round selector (visible when round view active) */}
-              {activeView === 'round' && availableRounds.length > 0 && (
+              {/* Round selector */}
+              {periodTab === 'round' && availableRounds.length > 0 && (
                 <select
                   value={selectedRound}
                   onChange={(e) => setSelectedRound(Number(e.target.value))}
@@ -227,7 +303,7 @@ export const PlayerComparisonCard: React.FC<Props> = ({
                   ))}
                 </select>
               )}
-              {activeView === 'round' && availableRounds.length === 0 && (
+              {periodTab === 'round' && availableRounds.length === 0 && (
                 <span className="text-sm text-gray-400">Нет данных за туры</span>
               )}
 
@@ -243,38 +319,31 @@ export const PlayerComparisonCard: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Benchmark label */}
-            {activeView === 'season_benchmark' && benchmarkLabel && (
-              <div className="text-xs text-indigo-600 bg-indigo-50 rounded-lg px-3 py-1.5 inline-flex items-center gap-1.5">
-                <span className="font-medium">Сравнение с эталоном:</span> {benchmarkLabel}
-              </div>
-            )}
-
-            {/* ========== Round sub-baselines (LEAGUE / TIER / BENCHMARK) ========== */}
-            {activeView === 'round' && (
-              <div className="flex gap-2">
-                {(['LEAGUE', 'TIER', 'BENCHMARK'] as const).map((bk) => {
-                  const available = roundBaselines.includes(bk);
-                  return (
-                    <button
-                      key={bk}
-                      onClick={() => available && setActiveRoundBaseline(bk)}
-                      disabled={!available}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        activeRoundBaseline === bk
-                          ? 'bg-blue-600 text-white shadow'
-                          : available
-                          ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                      }`}
-                    >
-                      {ROUND_BASELINE_LABELS[bk]}
-                      {!available && ' (нет)'}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+            {/* ========== Level 2: Вся лига | По корзине | Эталон ========== */}
+            <div className="flex items-center gap-2">
+              {activeBaselineOptions.map(b => (
+                <button
+                  key={b.key}
+                  onClick={() => b.available && setActiveBaseline(b.key)}
+                  disabled={!b.available}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    activeBaselineKey === b.key
+                      ? 'bg-indigo-600 text-white shadow'
+                      : b.available
+                        ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                  }`}
+                >
+                  {b.label}
+                  {!b.available && ' (нет)'}
+                </button>
+              ))}
+              {activeBaselineKey === 'SEASON_BENCHMARK' && benchmarkLabel && (
+                <span className="text-xs text-indigo-600 bg-indigo-50 rounded-lg px-2 py-1">
+                  {benchmarkLabel}
+                </span>
+              )}
+            </div>
 
             {/* ========== Content ========== */}
             {currentData ? (
@@ -387,15 +456,34 @@ export const PlayerComparisonCard: React.FC<Props> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Raw stats section */}
+                <RawStatsSection
+                  totalStats={totalStatsData?.stats_detailed}
+                  per90Stats={per90StatsData?.stats_detailed}
+                  statsView={statsView}
+                  setStatsView={setStatsView}
+                />
               </>
             ) : (
-              <div className="text-center py-10 text-gray-500">
-                {activeView === 'season'
-                  ? 'Нет сезонных данных. Загрузите PER90 данные и пересчитайте анализ.'
-                  : activeView === 'season_benchmark'
-                  ? 'Нет данных по эталону. Загрузите эталон и нажмите «Пересчитать».'
-                  : 'Нет данных за этот тур. Выберите другой тур.'}
-              </div>
+              <>
+                <div className="text-center py-6 text-gray-500">
+                  {activeBaselineKey.includes('TIER')
+                    ? 'Нет данных по корзине. Настройте корзины и пересчитайте анализ.'
+                    : activeBaselineKey.includes('BENCHMARK')
+                    ? 'Нет данных по эталону. Загрузите эталон и нажмите «Пересчитать».'
+                    : periodTab === 'season'
+                    ? 'Нет сезонных данных. Загрузите PER90 данные и пересчитайте анализ.'
+                    : 'Нет данных за этот тур. Выберите другой тур.'}
+                </div>
+                {/* Still show raw stats even without percentile data */}
+                <RawStatsSection
+                  totalStats={totalStatsData?.stats_detailed}
+                  per90Stats={per90StatsData?.stats_detailed}
+                  statsView={statsView}
+                  setStatsView={setStatsView}
+                />
+              </>
             )}
           </div>
         )}
@@ -410,6 +498,90 @@ function ScoreCard({ label, value, highlight, suffix }: { label: string; value: 
     <div className={`rounded-lg p-3 text-center ${highlight ? 'bg-blue-100 border border-blue-300' : 'bg-gray-50 border border-gray-200'}`}>
       <div className="text-xs text-gray-500 mb-1">{label}</div>
       <div className={`text-xl font-bold ${highlight ? 'text-blue-700' : 'text-gray-900'}`}>{displayVal}</div>
+    </div>
+  );
+}
+
+const STAT_CATEGORIES: Record<string, string> = {
+  scoring: 'Голы и удары',
+  passing: 'Передачи',
+  dribbling: 'Обводки',
+  duels: 'Единоборства',
+  defense: 'Защита',
+  discipline: 'Дисциплина',
+  goalkeeping: 'Вратарские',
+};
+
+function formatStatValue(value: number | null, dataType: string): string {
+  if (value === null || value === undefined) return '—';
+  if (dataType === 'PERCENTAGE') return `${value.toFixed(1)}%`;
+  if (dataType === 'FLOAT') return value.toFixed(2);
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(1);
+}
+
+function RawStatsSection({
+  totalStats,
+  per90Stats,
+  statsView,
+  setStatsView,
+}: {
+  totalStats?: Array<{ code: string; value: number | null; display_name: string; data_type: string; category: string; is_key_metric: boolean }>;
+  per90Stats?: Array<{ code: string; value: number | null; display_name: string; data_type: string; category: string; is_key_metric: boolean }>;
+  statsView: 'total' | 'per90';
+  setStatsView: (v: 'total' | 'per90') => void;
+}) {
+  const stats = statsView === 'total' ? totalStats : per90Stats;
+  if (!stats || stats.length === 0) return null;
+
+  const grouped: Record<string, typeof stats> = {};
+  for (const s of stats) {
+    const cat = s.category || 'other';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(s);
+  }
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+        <h4 className="text-sm font-semibold text-gray-700 flex items-center">
+          <TableCellsIcon className="w-4 h-4 mr-1.5" />
+          Статистика за сезон
+        </h4>
+        <div className="flex bg-gray-200 rounded-md p-0.5">
+          <button
+            onClick={() => setStatsView('total')}
+            className={`px-3 py-1 text-xs font-medium rounded transition-all ${statsView === 'total' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+          >
+            Всего
+          </button>
+          <button
+            onClick={() => setStatsView('per90')}
+            className={`px-3 py-1 text-xs font-medium rounded transition-all ${statsView === 'per90' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+          >
+            За 90 мин
+          </button>
+        </div>
+      </div>
+      <div className="divide-y divide-gray-100 max-h-[400px] overflow-y-auto">
+        {Object.entries(grouped).map(([cat, items]) => (
+          <div key={cat}>
+            <div className="px-4 py-1.5 bg-gray-50/60">
+              <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                {STAT_CATEGORIES[cat] || cat}
+              </span>
+            </div>
+            {items.map((s) => (
+              <div key={s.code} className="flex items-center justify-between px-4 py-1.5 hover:bg-gray-50 transition-colors">
+                <span className="text-sm text-gray-700">{s.display_name}</span>
+                <span className="text-sm font-mono font-medium text-gray-900 tabular-nums">
+                  {formatStatValue(s.value, s.data_type)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

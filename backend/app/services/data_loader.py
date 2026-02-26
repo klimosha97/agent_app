@@ -258,7 +258,8 @@ class DataLoader:
                 'players_loaded': players_loaded,
                 'stats_loaded': stats_loaded,
                 'slice_id': slice_id,
-                'is_new_slice': is_new
+                'is_new_slice': is_new,
+                'period_value': period_value,
             }
         
         except Exception as e:
@@ -346,13 +347,12 @@ class DataLoader:
         existing_id = existing.scalar()
         
         if existing_id:
-            # Для ROUND - удаляем старую статистику перед перезаписью
-            if period_type == 'ROUND':
-                deleted = self.db.execute(text("""
-                    DELETE FROM player_statistics
-                    WHERE slice_id = :slice_id
-                """), {'slice_id': existing_id})
-                logger.info(f"🗑️ Deleted {deleted.rowcount} old stats for ROUND slice: {existing_id}")
+            # Удаляем старую статистику перед перезаписью (и для SEASON, и для ROUND)
+            deleted = self.db.execute(text("""
+                DELETE FROM player_statistics
+                WHERE slice_id = :slice_id
+            """), {'slice_id': existing_id})
+            logger.info(f"🗑️ Deleted {deleted.rowcount} old stats for {period_type} slice: {existing_id}")
             
             # Обновляем существующий слайс
             self.db.execute(text("""

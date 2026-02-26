@@ -30,6 +30,71 @@ router = APIRouter()
 excel_service = ExcelImportService()
 
 
+def _snapshot_minutes(db: Session, tournament_id: int, season: str) -> dict:
+    """Snapshot current minutes per player before upload."""
+    rows = db.execute(text("""
+        SELECT ps.player_id, ps.metric_value
+        FROM player_statistics ps
+        JOIN stat_slices ss ON ps.slice_id = ss.slice_id
+        WHERE ss.tournament_id = :tid
+          AND ss.slice_type = 'TOTAL'
+          AND ss.period_type = 'SEASON'
+          AND ss.period_value = :season
+          AND ps.metric_code = 'minutes'
+          AND ps.metric_value IS NOT NULL
+    """), {"tid": tournament_id, "season": season}).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def _record_round_appearances(
+    db: Session,
+    tournament_id: int,
+    season: str,
+    round_number: int,
+    minutes_before: dict,
+) -> dict:
+    """Compare minutes after upload with snapshot to find who played."""
+    rows = db.execute(text("""
+        SELECT ps.player_id, ps.metric_value
+        FROM player_statistics ps
+        JOIN stat_slices ss ON ps.slice_id = ss.slice_id
+        WHERE ss.tournament_id = :tid
+          AND ss.slice_type = 'TOTAL'
+          AND ss.period_type = 'SEASON'
+          AND ss.period_value = :season
+          AND ps.metric_code = 'minutes'
+          AND ps.metric_value IS NOT NULL
+    """), {"tid": tournament_id, "season": season}).fetchall()
+
+    minutes_after = {r[0]: r[1] for r in rows}
+    played = []
+
+    for pid, mins_after in minutes_after.items():
+        mins_before = minutes_before.get(pid, 0)
+        if mins_after > mins_before:
+            is_debut = pid not in minutes_before
+            played.append((pid, mins_before, mins_after, is_debut))
+
+    if not played:
+        return {"recorded": 0}
+
+    db.execute(text("""
+        DELETE FROM round_appearances
+        WHERE tournament_id = :tid AND season = :season AND round_number = :rn
+    """), {"tid": tournament_id, "season": season, "rn": round_number})
+
+    for pid, mb, ma, debut in played:
+        db.execute(text("""
+            INSERT INTO round_appearances (player_id, tournament_id, season, round_number, minutes_before, minutes_after, is_debut)
+            VALUES (:pid, :tid, :season, :rn, :mb, :ma, :debut)
+            ON CONFLICT (player_id, tournament_id, season, round_number) DO UPDATE
+            SET minutes_before = :mb, minutes_after = :ma, is_debut = :debut, recorded_at = NOW()
+        """), {"pid": pid, "tid": tournament_id, "season": season, "rn": round_number, "mb": mb, "ma": ma, "debut": debut})
+
+    db.flush()
+    return {"recorded": len(played), "debuts": sum(1 for _, _, _, d in played if d)}
+
+
 @router.post("/upload-excel", response_model=FileUploadResponse, summary="Загрузить Excel файл")
 async def upload_excel_file(
     file: UploadFile = File(..., description="Excel файл с статистикой игроков"),
@@ -391,36 +456,31 @@ async def upload_season_stats(
             force_new_season=force_new_season
         )
         
-        # 4. Авто-заполнение team_tiers для новых команд
-        # Используем period_value из slice (например '1-15'), а не год
+        # 4. Smart-синхронизация корзин команд
         try:
             slice_season = result.get('period_value') or season or str(datetime.now().year)
-            # Также получаем period_value из слайса напрямую
             pv_row = db.execute(text("""
                 SELECT period_value FROM stat_slices WHERE slice_id = :sid
             """), {"sid": result['slice_id']}).fetchone()
             if pv_row and pv_row[0]:
                 slice_season = pv_row[0]
-            
-            db.execute(text("""
-                INSERT INTO team_tiers (tournament_id, season, team_name, tier)
-                SELECT DISTINCT :tid, :season, p.team_name, NULL
-                FROM players p
-                WHERE p.tournament_id = :tid
-                ON CONFLICT (tournament_id, season, team_name) DO NOTHING
-            """), {"tid": tournament_id, "season": slice_season})
+
+            from app.api.analysis import _sync_team_tiers
+            tier_sync = _sync_team_tiers(db, tournament_id, slice_season)
             db.commit()
-            logger.info(f"Auto-populated team_tiers with season={slice_season}")
+            if tier_sync["added"] or tier_sync["removed"]:
+                logger.info(f"Team tiers synced: +{tier_sync['added']}, -{tier_sync['removed']}")
         except Exception as te:
-            logger.warning(f"Could not auto-populate team_tiers: {te}")
+            logger.warning(f"Could not sync team_tiers: {te}")
         
         # 5. Автоматический расчёт сезонного анализа при загрузке PER90
         season_analysis = None
+        actual_season = result.get('period_value') or season
         if slice_type == 'PER90':
             try:
                 from app.services.percentile_engine import compute_season_analysis
-                season_analysis = compute_season_analysis(db=db, tournament_id=tournament_id)
-                logger.info(f"Season analysis computed: {season_analysis}")
+                season_analysis = compute_season_analysis(db=db, tournament_id=tournament_id, season=actual_season)
+                logger.info(f"Season analysis computed for season={actual_season}: {season_analysis}")
             except Exception as sa_err:
                 logger.warning(f"Season analysis failed (non-critical): {sa_err}")
                 season_analysis = {"error": str(sa_err)}
@@ -466,7 +526,7 @@ async def upload_tournament_data(
     tournament_id: int = Form(..., ge=0, le=3, description="ID турнира"),
     slice_type: str = Form(..., description="TOTAL или PER90"),
     season: Optional[str] = Form(None, description="Год сезона (например '2025')"),
-    round: Optional[int] = Form(None, ge=1, le=50, description="Номер тура (1-50)"),
+    round_number: Optional[int] = Form(None, ge=1, le=50, alias="round", description="Номер тура (1-50)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -512,7 +572,7 @@ async def upload_tournament_data(
         
         # 4. Сохраняем файл
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        round_str = f"_round{round}" if round else ""
+        round_str = f"_round{round_number}" if round_number else ""
         safe_filename = f"{timestamp}_{tournament_id}_{slice_type}_season{season}{round_str}_{file.filename}"
         file_path = FilePath(settings.upload_path) / safe_filename
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -520,9 +580,17 @@ async def upload_tournament_data(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        logger.info(f"📁 File saved: {file_path}")
+        logger.info(f"File saved: {file_path}")
         
-        # 5. Загружаем через DataLoader
+        # 5. Snapshot minutes before upload (for round tracking)
+        minutes_snapshot = {}
+        if slice_type == 'TOTAL' and round_number:
+            try:
+                minutes_snapshot = _snapshot_minutes(db, tournament_id, season)
+            except Exception as snap_err:
+                logger.warning(f"Minutes snapshot failed (non-critical): {snap_err}")
+
+        # 6. Загружаем через DataLoader
         loader = DataLoader(db)
         
         result = loader.load_file(
@@ -531,15 +599,35 @@ async def upload_tournament_data(
             slice_type=slice_type,
             period_type='SEASON',
             period_value=season,
-            force_new_season=False  # Всегда обновляем существующий сезон
+            force_new_season=False
         )
         
+        # 7. Record round appearances (who played in this round)
+        round_track_result = None
+        if slice_type == 'TOTAL' and round_number:
+            try:
+                round_track_result = _record_round_appearances(db, tournament_id, season, round_number, minutes_snapshot)
+                db.execute(text("UPDATE tournaments SET current_round = :rn WHERE id = :tid"), {"rn": round_number, "tid": tournament_id})
+                db.flush()
+                logger.info(f"Round appearances recorded for round {round_number}: {round_track_result}")
+            except Exception as rt_err:
+                logger.warning(f"Round tracking failed (non-critical): {rt_err}")
+        
+        # Синхронизация корзин команд при загрузке SEASON данных
+        try:
+            from app.api.analysis import _sync_team_tiers
+            tier_sync = _sync_team_tiers(db, tournament_id, season)
+            if tier_sync["added"] or tier_sync["removed"]:
+                logger.info(f"Team tiers synced: +{tier_sync['added']}, -{tier_sync['removed']}")
+        except Exception as ts_err:
+            logger.warning(f"Team tiers sync failed (non-critical): {ts_err}")
+
         # Авто-расчёт сезонного анализа при загрузке PER90
         if slice_type == 'PER90':
             try:
                 from app.services.percentile_engine import compute_season_analysis
-                sa_result = compute_season_analysis(db=db, tournament_id=tournament_id)
-                logger.info(f"Season analysis auto-computed: {sa_result}")
+                sa_result = compute_season_analysis(db=db, tournament_id=tournament_id, season=season)
+                logger.info(f"Season analysis auto-computed for season={season}: {sa_result}")
             except Exception as sa_err:
                 logger.warning(f"Season analysis failed: {sa_err}")
         
@@ -553,12 +641,13 @@ async def upload_tournament_data(
             "tournament_name": tournament_name,
             "slice_type": slice_type,
             "season": season,
-            "round": round,
+            "round": round_number,
             "slice_id": result['slice_id'],
             "players_loaded": result['players_loaded'],
             "stats_loaded": result['stats_loaded'],
+            "round_tracking": round_track_result,
             "duration_seconds": round(duration, 2),
-            "message": f"Данные сезона {season}, туры 1-{round or '?'} успешно загружены"
+            "message": f"Данные сезона {season}, туры 1-{round_number or '?'} успешно загружены"
         }
         
     except HTTPException:

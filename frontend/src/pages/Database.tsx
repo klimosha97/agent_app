@@ -174,6 +174,13 @@ const DEFAULT_VISIBLE_COLUMNS = [
   'duels_success_pct', 'yellow_cards', 'red_cards'
 ];
 
+const TOURNAMENT_NAMES: Record<number, string> = {
+  0: 'МФЛ',
+  1: 'ЮФЛ-1',
+  2: 'ЮФЛ-2',
+  3: 'ЮФЛ-3',
+};
+
 export const Database: React.FC = () => {
   const { setSelectedPlayerId } = usePlayerNavigation();
   
@@ -182,6 +189,7 @@ export const Database: React.FC = () => {
   const [searchInput, setSearchInput] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(50);
+  const [filterTournament, setFilterTournament] = useState<number | undefined>(undefined);
   
   // Сортировка
   const [sortField, setSortField] = useState<string | null>(null);
@@ -209,18 +217,21 @@ export const Database: React.FC = () => {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  // Загружаем данные
+  // Загружаем данные — все турниры, все сезоны
   const { data, isLoading, error } = useQuery(
-    ['database-players', sliceType, search, currentPage, itemsPerPage, sortField, sortOrder],
+    ['database-players', sliceType, search, currentPage, itemsPerPage, sortField, sortOrder, filterTournament],
     () => apiService.getAllPlayersFromDatabase(
       currentPage,
       itemsPerPage,
       sliceType,
       search || undefined,
-      undefined,
+      filterTournament,
       undefined,
       sortField || undefined,
-      sortOrder
+      sortOrder,
+      'SEASON',
+      undefined,
+      false
     ),
     {
       keepPreviousData: true,
@@ -284,7 +295,7 @@ export const Database: React.FC = () => {
   const displayedColumns = CONFIGURABLE_COLUMNS.filter(col => visibleColumns.includes(col.key));
 
   // Общее количество колонок включая замороженные
-  const totalColumnsCount = displayedColumns.length + 3; // +3 за Игрок, Команда, Поз
+  const totalColumnsCount = displayedColumns.length + 5; // +5 за Игрок, Команда, Поз, Турнир, Сезон
 
   return (
     <div className="space-y-6">
@@ -353,6 +364,18 @@ export const Database: React.FC = () => {
               )}
             </div>
 
+            {/* Фильтр по турниру */}
+            <select
+              value={filterTournament ?? ''}
+              onChange={(e) => { setFilterTournament(e.target.value ? Number(e.target.value) : undefined); setCurrentPage(1); }}
+              className="px-3 py-2 text-sm rounded-lg border border-gray-300 bg-white text-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="">Все турниры</option>
+              {Object.entries(TOURNAMENT_NAMES).map(([id, name]) => (
+                <option key={id} value={id}>{name}</option>
+              ))}
+            </select>
+
             {/* Кнопка настройки колонок */}
             <TableColumnsSettings
               columns={CONFIGURABLE_COLUMNS}
@@ -409,9 +432,21 @@ export const Database: React.FC = () => {
                     </th>
                     <th
                       className="px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200 sticky left-[320px] z-20 w-[60px]"
-                      style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}
                     >
                       <span className="whitespace-nowrap">Поз</span>
+                    </th>
+                    <th
+                      onClick={() => handleSort('tournament_id')}
+                      className="px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200 sticky left-[380px] z-20 w-[70px] cursor-pointer group hover:bg-gray-100"
+                    >
+                      <span className="flex items-center whitespace-nowrap">Турнир{renderSortIcon('tournament_id')}</span>
+                    </th>
+                    <th
+                      onClick={() => handleSort('season')}
+                      className="px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200 sticky left-[450px] z-20 w-[65px] cursor-pointer group hover:bg-gray-100"
+                      style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}
+                    >
+                      <span className="flex items-center whitespace-nowrap">Сезон{renderSortIcon('season')}</span>
                     </th>
                     
                     {/* Скроллящиеся заголовки - только видимые */}
@@ -483,11 +518,19 @@ export const Database: React.FC = () => {
                         </td>
                         <td 
                           className={`px-3 py-2 text-sm sticky left-[320px] z-10 w-[60px] ${rowBg}`}
-                          style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}
                         >
                           <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-800">
                             {player.position_code}
                           </span>
+                        </td>
+                        <td className={`px-3 py-2 text-xs text-gray-600 sticky left-[380px] z-10 w-[70px] whitespace-nowrap ${rowBg}`}>
+                          {TOURNAMENT_NAMES[player.tournament_id] ?? `T${player.tournament_id}`}
+                        </td>
+                        <td
+                          className={`px-3 py-2 text-xs text-gray-500 sticky left-[450px] z-10 w-[65px] ${rowBg}`}
+                          style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}
+                        >
+                          {player.season || '—'}
                         </td>
                         
                         {/* Скроллящиеся ячейки - только видимые */}

@@ -87,7 +87,7 @@ export const TableColumnsSettings: React.FC<TableColumnsSettingsProps> = ({
       setTempSelection(prev => prev.filter(key => !groupColumns.includes(key)));
     } else {
       // Добавляем все колонки группы
-      setTempSelection(prev => [...new Set([...prev, ...groupColumns])]);
+      setTempSelection(prev => Array.from(new Set([...prev, ...groupColumns])));
     }
   };
 

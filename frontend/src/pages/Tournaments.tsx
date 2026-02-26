@@ -238,7 +238,7 @@ function ssSet(key: string, val: string) { try { sessionStorage.setItem(key, val
 function ssRemove(key: string) { try { sessionStorage.removeItem(key); } catch {} }
 function ssGetNum(key: string): number | null { const v = ssGet(key); return v !== null ? Number(v) : null; }
 
-const VALID_SECTIONS: TournamentSection[] = ['overview', 'all_players', 'last_round_players', 'best_performances', 'top_by_position'];
+const VALID_SECTIONS: TournamentSection[] = ['overview', 'all_players', 'last_round_players', 'best_performances', 'top_by_position', 'new_faces'];
 
 export const Tournaments: React.FC = () => {
   const { setSelectedPlayerId } = usePlayerNavigation();
@@ -255,6 +255,7 @@ export const Tournaments: React.FC = () => {
   
   // Состояния для таблицы игроков турнира
   const [sliceType, setSliceType] = useState<'TOTAL' | 'PER90'>('TOTAL');
+  const [selectedSeason, setSelectedSeason] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -339,6 +340,7 @@ export const Tournaments: React.FC = () => {
       setCurrentPage(1);
       setSortField('goals');
       setSortOrder('desc');
+      setSelectedSeason('__all__');
     }
     if (selectedSection === 'last_round_players') {
       setRoundSearchInput('');
@@ -346,13 +348,42 @@ export const Tournaments: React.FC = () => {
       setRoundCurrentPage(1);
       setRoundSortField('goals');
       setRoundSortOrder('desc');
-      setSelectedRound(null); // Сброс на последний тур
+      setSelectedRound(null);
+    }
+    if (selectedSection !== 'all_players') {
+      setSelectedSeason(null);
     }
   }, [selectedTournamentId, selectedSection]);
 
+  // Загружаем список доступных сезонов для турнира
+  const { data: seasonsData } = useQuery(
+    ['available-seasons', selectedTournamentId],
+    () => apiService.getAvailableSeasons(selectedTournamentId!),
+    {
+      enabled: selectedTournamentId !== null,
+      refetchOnWindowFocus: false,
+    }
+  );
+  const availableSeasons: { period_value: string; players_count: number; has_scores: boolean }[] = seasonsData?.data || [];
+  const currentSeason = seasonsData?.current || null;
+  const effectiveSeason = selectedSeason ?? currentSeason;
+
+  // Загружаем корзины команд для турнира
+  const { data: tierData } = useQuery(
+    ['team-tiers', selectedTournamentId],
+    () => apiService.getTeamTiers(selectedTournamentId!),
+    { enabled: selectedTournamentId !== null, refetchOnWindowFocus: false }
+  );
+  const teamTierMap: Record<string, string | null> = {};
+  if (tierData?.data) {
+    for (const t of tierData.data) {
+      teamTierMap[t.team_name] = t.tier;
+    }
+  }
+
   // Загружаем данные игроков турнира (за сезон)
   const { data: playersData, isLoading: isLoadingPlayers } = useQuery(
-    ['tournament-players', selectedTournamentId, sliceType, search, currentPage, itemsPerPage, sortField, sortOrder],
+    ['tournament-players', selectedTournamentId, sliceType, search, currentPage, itemsPerPage, sortField, sortOrder, selectedSeason],
     () => apiService.getAllPlayersFromDatabase(
       currentPage,
       itemsPerPage,
@@ -362,7 +393,10 @@ export const Tournaments: React.FC = () => {
       undefined,
       sortField || undefined,
       sortOrder,
-      'SEASON'
+      'SEASON',
+      undefined,
+      selectedSeason === '__all__' ? false : true,
+      selectedSeason && selectedSeason !== '__all__' ? selectedSeason : undefined
     ),
     {
       enabled: selectedSection === 'all_players' && selectedTournamentId !== null,
@@ -563,6 +597,7 @@ export const Tournaments: React.FC = () => {
       onBack={handleBackToOverview}
       onPlayerClick={(pid: number) => { setComparisonPlayerId(pid); setComparisonRound(displayAnalysisRound); setComparisonMode('round'); }}
       onTierEditorOpen={() => setTierEditorOpen(true)}
+      teamTierMap={teamTierMap}
     />;
   };
 
@@ -588,6 +623,10 @@ export const Tournaments: React.FC = () => {
       onBack={handleBackToOverview}
       onPlayerClick={(pid: number) => { setComparisonPlayerId(pid); setComparisonRound(displayAnalysisRound); setComparisonMode('season'); }}
       onTierEditorOpen={() => setTierEditorOpen(true)}
+      selectedSeason={selectedSeason}
+      availableSeasons={availableSeasons}
+      onSeasonChange={(s) => { setSelectedSeason(s); }}
+      teamTierMap={teamTierMap}
     />;
   };
 
@@ -601,9 +640,10 @@ export const Tournaments: React.FC = () => {
     const totalCount = playersData?.total || 0;
     const totalPages = playersData?.pages || 0;
 
+    const showSeasonCol = selectedSeason === '__all__';
     // Фильтруем колонки по видимым
     const displayedColumns = PLAYER_COLUMNS.filter(col => visibleColumns.includes(col.key));
-    const totalColumnsCount = displayedColumns.length + 3; // +3 за Игрок, Команда, Поз
+    const totalColumnsCount = displayedColumns.length + 3 + (showSeasonCol ? 1 : 0);
 
     return (
       <div className="space-y-6">
@@ -680,6 +720,30 @@ export const Tournaments: React.FC = () => {
                 За 90 минут
               </button>
             </div>
+
+            {/* Селектор сезона */}
+            <select
+              value={selectedSeason ?? ''}
+              onChange={(e) => { setSelectedSeason(e.target.value || null); setCurrentPage(1); }}
+              className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-700 cursor-pointer hover:border-purple-300 focus:outline-none focus:ring-1 focus:ring-purple-400"
+            >
+              <option value="__all__">Все сезоны</option>
+              {availableSeasons.map(s => (
+                <option key={s.period_value} value={s.period_value}>
+                  Сезон {s.period_value} ({s.players_count} игр.)
+                </option>
+              ))}
+            </select>
+
+            {/* Настроить корзины */}
+            <button
+              onClick={() => setTierEditorOpen(true)}
+              className="px-3 py-2 text-xs font-medium text-purple-700 bg-purple-100 hover:bg-purple-200 rounded-lg transition-colors flex items-center gap-1"
+              title="Настроить корзины команд"
+            >
+              <ArrowsUpDownIcon className="w-4 h-4" />
+              Корзины
+            </button>
           </div>
         </div>
 
@@ -748,9 +812,14 @@ export const Tournaments: React.FC = () => {
                       <th onClick={() => handleSort('team_name')} className="px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200 cursor-pointer hover:bg-gray-100 sticky left-[180px] z-20 min-w-[140px]">
                         <span className="flex items-center whitespace-nowrap">Команда{renderSortIcon('team_name')}</span>
                       </th>
-                      <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200 sticky left-[320px] z-20 w-[60px]" style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}>
+                      <th className={`px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200 sticky left-[320px] z-20 w-[60px]`} style={showSeasonCol ? undefined : { boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}>
                         <span className="whitespace-nowrap">Поз</span>
                       </th>
+                      {showSeasonCol && (
+                        <th onClick={() => handleSort('season')} className="px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider bg-gray-50 border-b border-gray-200 sticky left-[380px] z-20 w-[70px] cursor-pointer hover:bg-gray-100" style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}>
+                          <span className="flex items-center whitespace-nowrap">Сезон{renderSortIcon('season')}</span>
+                        </th>
+                      )}
                       
                       {/* Скроллящиеся заголовки - только видимые */}
                       {displayedColumns.map((col) => (
@@ -801,13 +870,26 @@ export const Tournaments: React.FC = () => {
                               {player.full_name}
                             </td>
                             <td className={`px-3 py-2 text-sm text-gray-600 sticky left-[180px] z-10 min-w-[140px] whitespace-nowrap ${rowBg}`}>
-                              {player.team_name}
+                              <span className="flex items-center gap-1.5">
+                                {player.team_name}
+                                {teamTierMap[player.team_name] === 'TOP' && (
+                                  <span className="inline-flex w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" title="Верхняя корзина" />
+                                )}
+                                {teamTierMap[player.team_name] === 'BOTTOM' && (
+                                  <span className="inline-flex w-2 h-2 rounded-full bg-orange-500 flex-shrink-0" title="Нижняя корзина" />
+                                )}
+                              </span>
                             </td>
-                            <td className={`px-3 py-2 text-sm sticky left-[320px] z-10 w-[60px] ${rowBg}`} style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}>
+                            <td className={`px-3 py-2 text-sm sticky left-[320px] z-10 w-[60px] ${rowBg}`} style={showSeasonCol ? undefined : { boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}>
                               <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-800">
                                 {player.position_code}
                               </span>
                             </td>
+                            {showSeasonCol && (
+                              <td className={`px-3 py-2 text-xs text-gray-500 sticky left-[380px] z-10 w-[70px] ${rowBg}`} style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}>
+                                {player.season || '—'}
+                              </td>
+                            )}
                             
                             {/* Только видимые колонки */}
                             {displayedColumns.map((col) => {
@@ -956,6 +1038,16 @@ export const Tournaments: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Настроить корзины */}
+            <button
+              onClick={() => setTierEditorOpen(true)}
+              className="px-3 py-2 text-xs font-medium text-purple-700 bg-purple-100 hover:bg-purple-200 rounded-lg transition-colors flex items-center gap-1"
+              title="Настроить корзины команд"
+            >
+              <ArrowsUpDownIcon className="w-4 h-4" />
+              Корзины
+            </button>
+
             {/* Кнопка загрузки тура */}
             <button
               onClick={(e) => handleRoundUploadClick(selectedTournament, e)}
@@ -1147,7 +1239,15 @@ export const Tournaments: React.FC = () => {
                               {player.full_name}
                             </td>
                             <td className={`px-3 py-2 text-sm text-gray-600 sticky left-[180px] z-10 min-w-[140px] whitespace-nowrap ${rowBg}`}>
-                              {player.team_name}
+                              <span className="flex items-center gap-1.5">
+                                {player.team_name}
+                                {teamTierMap[player.team_name] === 'TOP' && (
+                                  <span className="inline-flex w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" title="Верхняя корзина" />
+                                )}
+                                {teamTierMap[player.team_name] === 'BOTTOM' && (
+                                  <span className="inline-flex w-2 h-2 rounded-full bg-orange-500 flex-shrink-0" title="Нижняя корзина" />
+                                )}
+                              </span>
                             </td>
                             <td className={`px-3 py-2 text-sm sticky left-[320px] z-10 w-[60px] ${rowBg}`} style={{ boxShadow: '4px 0 6px -2px rgba(0, 0, 0, 0.1)' }}>
                               <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-yellow-100 text-yellow-800">
@@ -1414,6 +1514,25 @@ export const Tournaments: React.FC = () => {
   };
 
   // ========================================
+  // Секция: Новые лица
+  // ========================================
+  const renderNewFacesSection = () => {
+    if (!selectedTournament) return null;
+    return (
+      <NewFacesSection
+        tournament={selectedTournament}
+        season={selectedSeason || undefined}
+        onBack={handleBackToOverview}
+        onPlayerClick={(pid: number) => {
+          setComparisonPlayerId(pid);
+          setComparisonMode('season');
+        }}
+        onOpenProfile={(pid: number) => setSelectedPlayerId(pid)}
+      />
+    );
+  };
+
+  // ========================================
   // ОСНОВНОЙ РЕНДЕР
   // ========================================
   
@@ -1430,6 +1549,8 @@ export const Tournaments: React.FC = () => {
         return renderBestPerformancesSection();
       } else if (selectedSection === 'top_by_position') {
         return renderTopByPositionSection();
+      } else if (selectedSection === 'new_faces') {
+        return renderNewFacesSection();
       } else {
         return renderStubSection(selectedSection);
       }
@@ -1661,7 +1782,8 @@ const BASELINE_OPTIONS = [
 const SORT_OPTIONS = [
   { value: 'total_score', label: 'Core + Support' },
   { value: 'core_score_adj', label: 'Core' },
-  { value: 'support_score', label: 'Support' },
+  { value: 'support_score_adj', label: 'Support' },
+  { value: 'good_share_core', label: 'Good%' },
 ];
 const FUNNEL_OPTIONS = [
   { value: 'all', label: 'Все' },
@@ -1684,6 +1806,10 @@ interface AnalysisSectionProps {
   onBack: () => void;
   onPlayerClick: (pid: number) => void;
   onTierEditorOpen?: () => void;
+  selectedSeason?: string | null;
+  availableSeasons?: { period_value: string; players_count: number; has_scores: boolean }[];
+  onSeasonChange?: (season: string | null) => void;
+  teamTierMap?: Record<string, string | null>;
 }
 
 function AnalysisControls({ baseline, setBaseline, sortBy, setSortBy, funnel, setFunnel, displayRound, availableRounds, setAnalysisRound, onTierEditorOpen, onTogglePositions, showPositions }: Partial<AnalysisSectionProps> & { displayRound: number; availableRounds: number[]; onTogglePositions?: () => void; showPositions?: boolean }) {
@@ -1790,6 +1916,14 @@ function ScoreCell({ value, label }: { value: number | null; label?: string }) {
   return <span className={colorClass}>{pct.toFixed(0)}</span>;
 }
 
+function TierDot({ teamName, tierMap }: { teamName: string; tierMap?: Record<string, string | null> }) {
+  if (!tierMap) return null;
+  const tier = tierMap[teamName];
+  if (tier === 'TOP') return <span className="inline-flex w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0 ml-1" title="Верхняя корзина" />;
+  if (tier === 'BOTTOM') return <span className="inline-flex w-2 h-2 rounded-full bg-orange-500 flex-shrink-0 ml-1" title="Нижняя корзина" />;
+  return null;
+}
+
 function RiskBadges({ flags }: { flags: Record<string, any> }) {
   if (!flags || Object.keys(flags).length === 0) return null;
   const RISK_ICONS: Record<string, string> = {
@@ -1873,15 +2007,15 @@ const BestPerformancesSection: React.FC<AnalysisSectionProps> = (props) => {
 
   // Fetch top data — request more to allow client-side pagination
   const { data, isLoading, refetch } = useQuery(
-    ['round-top', tournament.id, displayRound, baseline, 'core_score_adj', funnel],
-    () => apiService.getRoundTop(tournament.id, displayRound, { baseline_kind: baseline, sort_by: 'core_score_adj', funnel, limit: 200 }),
+    ['round-top', tournament.id, displayRound, baseline, props.sortBy, funnel],
+    () => apiService.getRoundTop(tournament.id, displayRound, { baseline_kind: baseline, sort_by: props.sortBy || 'core_score_adj', funnel, limit: 200 }),
     { enabled: displayRound > 0, keepPreviousData: true }
   );
 
   // Fetch top by position for round
   const { data: posByPosData, isLoading: posByPosLoading } = useQuery(
-    ['round-top-position', tournament.id, displayRound, baseline, localSort, funnel],
-    () => apiService.getRoundTopByPosition(tournament.id, displayRound, { baseline_kind: baseline, sort_by: localSort, funnel, limit_per_position: 10 }),
+    ['round-top-position', tournament.id, displayRound, baseline, props.sortBy, funnel],
+    () => apiService.getRoundTopByPosition(tournament.id, displayRound, { baseline_kind: baseline, sort_by: props.sortBy || 'core_score_adj', funnel, limit_per_position: 10 }),
     { enabled: displayRound > 0 && showPositions, keepPreviousData: true }
   );
 
@@ -2116,7 +2250,7 @@ const BestPerformancesSection: React.FC<AnalysisSectionProps> = (props) => {
                       >
                         <td className="px-3 py-2 text-sm text-gray-400 w-8">{(page - 1) * BEST_PAGE_SIZE + idx + 1}</td>
                         <td className="px-3 py-2 text-sm font-medium text-blue-600 hover:underline">{p.full_name}</td>
-                        <td className="px-3 py-2 text-sm text-gray-600">{p.team_name}</td>
+                        <td className="px-3 py-2 text-sm text-gray-600"><span className="flex items-center">{p.team_name}<TierDot teamName={p.team_name} tierMap={props.teamTierMap} /></span></td>
                         <td className="px-3 py-2 text-center">
                           <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-800">{p.position_code}</span>
                         </td>
@@ -2244,7 +2378,7 @@ const BestPerformancesSection: React.FC<AnalysisSectionProps> = (props) => {
                                     <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-500">{p.position_detail}</span>
                                   )}
                                 </td>
-                                <td className="px-3 py-1.5 text-sm text-gray-600">{p.team_name}</td>
+                                <td className="px-3 py-1.5 text-sm text-gray-600"><span className="flex items-center">{p.team_name}<TierDot teamName={p.team_name} tierMap={props.teamTierMap} /></span></td>
                                 <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.core_score_adj} /></td>
                                 <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.support_score_adj} /></td>
                                 <td className="px-3 py-1.5 text-sm text-right tabular-nums font-semibold"><ScoreCell value={p.total_score} /></td>
@@ -2272,17 +2406,20 @@ const SEASON_PAGE_SIZE = 15;
 
 const SEASON_BASELINE_OPTIONS = [
   { value: 'SEASON', label: 'Вся лига' },
+  { value: 'TIER', label: 'По корзине' },
   { value: 'SEASON_BENCHMARK', label: 'Эталон' },
 ];
 
 const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
-  const { tournament, onBack, onPlayerClick, sortBy, setSortBy, funnel, setFunnel } = props;
+  const { tournament, onBack, onPlayerClick, sortBy, setSortBy, funnel, setFunnel, selectedSeason, availableSeasons, onSeasonChange } = props;
   const [recomputing, setRecomputing] = useState(false);
   const [localSort, setLocalSort] = useState<string>('core_score_adj');
   const [localSortDir, setLocalSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
   const [showPositions, setShowPositions] = useState(false);
   const [seasonBaseline, setSeasonBaseline] = useState<string>('SEASON');
+
+  const seasonParam = selectedSeason && selectedSeason !== '__all__' ? selectedSeason : undefined;
 
   // Benchmark state
   const benchmarkFileRef = useRef<HTMLInputElement>(null);
@@ -2297,14 +2434,14 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
   );
 
   const { data: flatData, isLoading: flatLoading, refetch } = useQuery(
-    ['season-top-flat', tournament.id, funnel, seasonBaseline],
-    () => apiService.getSeasonTop(tournament.id, { sort_by: 'core_score_adj', funnel, baseline_kind: seasonBaseline, limit: 200 }),
+    ['season-top-flat', tournament.id, sortBy, funnel, seasonBaseline, seasonParam],
+    () => apiService.getSeasonTop(tournament.id, { sort_by: sortBy || 'core_score_adj', funnel, baseline_kind: seasonBaseline, season: seasonParam, limit: 200 }),
     { keepPreviousData: true }
   );
 
   const { data: posByPosData, isLoading: posByPosLoading } = useQuery(
-    ['season-top-position', tournament.id, sortBy, funnel, seasonBaseline],
-    () => apiService.getSeasonTopByPosition(tournament.id, { sort_by: sortBy, funnel, baseline_kind: seasonBaseline, limit_per_position: 10 }),
+    ['season-top-position', tournament.id, sortBy, funnel, seasonBaseline, seasonParam],
+    () => apiService.getSeasonTopByPosition(tournament.id, { sort_by: sortBy, funnel, baseline_kind: seasonBaseline, season: seasonParam, limit_per_position: 10 }),
     { enabled: showPositions, keepPreviousData: true }
   );
 
@@ -2356,7 +2493,7 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
   const handleRecompute = async () => {
     setRecomputing(true);
     try {
-      await apiService.recomputeSeasonAnalysis(tournament.id);
+      await apiService.recomputeSeasonAnalysis(tournament.id, seasonParam);
       refetch();
       refetchBenchmark();
     } catch (e: any) {
@@ -2412,16 +2549,33 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
             </h1>
             <p className="text-gray-600">
               {tournament.full_name} — стабильность на дистанции (PER90 за весь сезон)
+              {seasonParam && <span className="ml-2 text-purple-600 font-medium">· Сезон {seasonParam}</span>}
             </p>
           </div>
         </div>
-        <button
-          onClick={handleRecompute}
-          disabled={recomputing}
-          className="px-4 py-2 bg-purple-500 text-white rounded-lg text-sm font-medium hover:bg-purple-600 disabled:opacity-50 transition-colors"
-        >
-          {recomputing ? 'Пересчёт...' : 'Пересчитать'}
-        </button>
+        <div className="flex items-center gap-3">
+          {availableSeasons && availableSeasons.length > 1 && (
+            <select
+              value={selectedSeason ?? ''}
+              onChange={(e) => { onSeasonChange?.(e.target.value || null); setPage(1); }}
+              className="px-3 py-2 text-sm font-medium rounded-lg border border-purple-200 bg-purple-50 text-purple-700 cursor-pointer hover:border-purple-400 focus:outline-none focus:ring-1 focus:ring-purple-400"
+            >
+              <option value="">Текущий сезон</option>
+              {availableSeasons.map(s => (
+                <option key={s.period_value} value={s.period_value}>
+                  Сезон {s.period_value} ({s.players_count} игр.)
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={handleRecompute}
+            disabled={recomputing}
+            className="px-4 py-2 bg-purple-500 text-white rounded-lg text-sm font-medium hover:bg-purple-600 disabled:opacity-50 transition-colors"
+          >
+            {recomputing ? 'Пересчёт...' : 'Пересчитать'}
+          </button>
+        </div>
       </div>
 
       {/* Controls */}
@@ -2480,10 +2634,26 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
               Топ по позициям
             </button>
 
+            {/* Tier editor button */}
+            {props.onTierEditorOpen && (
+              <button
+                onClick={() => {
+                  setSeasonBaseline('TIER');
+                  props.onTierEditorOpen?.();
+                }}
+                className="px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-100 hover:bg-purple-200 rounded-lg transition-colors flex items-center gap-1"
+              >
+                <ArrowsUpDownIcon className="w-3.5 h-3.5" />
+                Настроить корзины
+              </button>
+            )}
+
             <span className="text-xs text-gray-400 ml-2">
               {seasonBaseline === 'SEASON_BENCHMARK'
                 ? `Эталон: ${benchmarkData?.label || 'не загружен'}`
-                : 'Данные: среднее за 90 мин за весь сезон'
+                : seasonBaseline === 'TIER'
+                  ? 'Сравнение внутри корзины (TOP / BOTTOM)'
+                  : 'Данные: среднее за 90 мин за весь сезон'
               }
             </span>
           </div>
@@ -2574,6 +2744,36 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
         </Card>
       )}
 
+      {/* Tier info bar */}
+      {seasonBaseline === 'TIER' && (
+        <Card className="border-purple-200 bg-purple-50/30">
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center">
+                  <ArrowsUpDownIcon className="w-4 h-4 text-purple-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-purple-900">Сравнение по корзинам</p>
+                  <p className="text-xs text-purple-500">
+                    Игроки сравниваются только с другими из той же корзины (TOP или BOTTOM)
+                  </p>
+                </div>
+              </div>
+              {props.onTierEditorOpen && (
+                <button
+                  onClick={() => props.onTierEditorOpen?.()}
+                  className="px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-100 hover:bg-purple-200 rounded-lg transition-colors flex items-center gap-1"
+                >
+                  <ArrowsUpDownIcon className="w-3.5 h-3.5" />
+                  Настроить корзины
+                </button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ===== Content: Flat Table OR Top by Position ===== */}
       {!showPositions ? (
       <Card>
@@ -2650,7 +2850,7 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
                       >
                         <td className="px-3 py-2 text-sm text-gray-400 w-8">{(page - 1) * SEASON_PAGE_SIZE + idx + 1}</td>
                         <td className="px-3 py-2 text-sm font-medium text-blue-600 hover:underline">{p.full_name}</td>
-                        <td className="px-3 py-2 text-sm text-gray-600">{p.team_name}</td>
+                        <td className="px-3 py-2 text-sm text-gray-600"><span className="flex items-center">{p.team_name}<TierDot teamName={p.team_name} tierMap={props.teamTierMap} /></span></td>
                         <td className="px-3 py-2 text-center">
                           <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-purple-100 text-purple-800">{p.position_code}</span>
                         </td>
@@ -2778,7 +2978,7 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
                                     <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-500">{p.position_detail}</span>
                                   )}
                                 </td>
-                                <td className="px-3 py-1.5 text-sm text-gray-600">{p.team_name}</td>
+                                <td className="px-3 py-1.5 text-sm text-gray-600"><span className="flex items-center">{p.team_name}<TierDot teamName={p.team_name} tierMap={props.teamTierMap} /></span></td>
                                 <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.core_score_adj} /></td>
                                 <td className="px-3 py-1.5 text-sm text-right tabular-nums"><ScoreCell value={p.support_score_adj} /></td>
                                 <td className="px-3 py-1.5 text-sm text-right tabular-nums font-semibold"><ScoreCell value={p.total_score} /></td>
@@ -2796,6 +2996,141 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
           })}
           </>
         )
+      )}
+    </div>
+  );
+};
+
+
+// ================================================================
+// NewFacesSection — Новые лица в туре
+// ================================================================
+
+interface NewFacesSectionProps {
+  tournament: any;
+  season?: string;
+  onBack: () => void;
+  onPlayerClick: (playerId: number) => void;
+  onOpenProfile: (playerId: number) => void;
+}
+
+const NewFacesSection: React.FC<NewFacesSectionProps> = ({ tournament, season, onBack, onPlayerClick, onOpenProfile }) => {
+  const [search, setSearch] = useState('');
+  const { data, isLoading } = useQuery(
+    ['new-faces', tournament.id, season],
+    () => apiService.getNewFaces(tournament.id, season),
+    { enabled: !!tournament }
+  );
+
+  const players: any[] = data?.data || [];
+  const roundNumber = data?.round_number;
+  const totalCount = data?.total_count || 0;
+  const debutsCount = data?.debuts_count || 0;
+  const filtered = search
+    ? players.filter((p: any) =>
+        p.full_name?.toLowerCase().includes(search.toLowerCase()) ||
+        p.team_name?.toLowerCase().includes(search.toLowerCase())
+      )
+    : players;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center space-x-4">
+        <button onClick={onBack} className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors">
+          <ArrowLeftIcon className="w-4 h-4 mr-2" />Назад к разделам
+        </button>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Новые лица в этом туре</h1>
+          <p className="text-gray-600">{tournament.full_name}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-center">
+          <div className="text-2xl font-bold text-emerald-700">{totalCount}</div>
+          <div className="text-xs text-emerald-600 mt-1">Новых лиц</div>
+        </div>
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
+          <div className="text-2xl font-bold text-blue-700">{debutsCount}</div>
+          <div className="text-xs text-blue-600 mt-1">Дебюты</div>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
+          <div className="text-2xl font-bold text-amber-700">{roundNumber ? `Тур ${roundNumber}` : '—'}</div>
+          <div className="text-xs text-amber-600 mt-1">Последний загруженный</div>
+        </div>
+      </div>
+
+      <div className="relative">
+        <MagnifyingGlassIcon className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+        <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск по имени или команде..." className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500" />
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16">
+          <svg className="animate-spin h-8 w-8 text-emerald-500 mr-3" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          Загрузка...
+        </div>
+      ) : !roundNumber ? (
+        <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-gray-500">
+          <UserPlusIcon className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+          <p className="text-lg font-medium mb-2">Нет данных о турах</p>
+          <p className="text-sm">Загрузите TOTAL данные с указанием номера тура, чтобы отслеживать новые лица.</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-gray-500">
+          <p className="text-lg font-medium mb-2">{search ? 'Ничего не найдено' : 'Нет новых лиц в этом туре'}</p>
+          <p className="text-sm">{search ? 'Попробуйте другой запрос' : 'Все игроки, сыгравшие в этом туре, имеют 200+ минут.'}</p>
+        </div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">#</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Игрок</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Команда</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Позиция</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Год</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Мин. за тур</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Всего мин.</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Статус</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Действия</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filtered.map((p: any, idx: number) => (
+                  <tr key={p.player_id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 text-gray-400 text-xs">{idx + 1}</td>
+                    <td className="px-4 py-3">
+                      <button onClick={() => onPlayerClick(p.player_id)} className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline text-left">{p.full_name}</button>
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 text-sm">{p.team_name || '—'}</td>
+                    <td className="px-4 py-3"><span className="px-2 py-0.5 text-xs font-medium rounded bg-gray-100 text-gray-700">{p.position_code || '—'}</span></td>
+                    <td className="px-4 py-3 text-center text-gray-600 text-sm">{p.birth_year || '—'}</td>
+                    <td className="px-4 py-3 text-center font-mono text-sm font-medium text-gray-900">{p.minutes_in_round}</td>
+                    <td className="px-4 py-3 text-center font-mono text-sm">
+                      <span className={p.total_minutes < 100 ? 'text-emerald-600 font-medium' : 'text-amber-600 font-medium'}>{Math.round(p.total_minutes)}</span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {p.is_debut ? (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">Дебют</span>
+                      ) : (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">&lt;200 мин</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button onClick={() => onOpenProfile(p.player_id)} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium hover:underline">Профиль</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   );

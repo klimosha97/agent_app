@@ -44,10 +44,45 @@ async def lifespan(app: FastAPI):
     try:
         from app.database import create_db_session
         from app.services.position_metrics import sync_position_metrics
+        from sqlalchemy import text
         session = create_db_session()
         try:
             result = sync_position_metrics(session)
             logger.info(f"Position metrics synced: {result}")
+            # Ensure watched_players table exists
+            session.execute(text("""
+                CREATE TABLE IF NOT EXISTS watched_players (
+                    id SERIAL PRIMARY KEY,
+                    player_id INTEGER NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+                    list_type VARCHAR(20) NOT NULL CHECK (list_type IN ('MY', 'TRACKED')),
+                    notes TEXT,
+                    added_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(player_id, list_type)
+                )
+            """))
+            session.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_watched_list_type ON watched_players(list_type)
+            """))
+            session.execute(text("""
+                CREATE TABLE IF NOT EXISTS round_appearances (
+                    id SERIAL PRIMARY KEY,
+                    player_id INTEGER NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
+                    tournament_id INTEGER NOT NULL,
+                    season VARCHAR(10) NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    minutes_before DOUBLE PRECISION DEFAULT 0,
+                    minutes_after DOUBLE PRECISION DEFAULT 0,
+                    is_debut BOOLEAN DEFAULT FALSE,
+                    recorded_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(player_id, tournament_id, season, round_number)
+                )
+            """))
+            session.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_ra_tournament_round
+                ON round_appearances(tournament_id, season, round_number)
+            """))
+            session.commit()
+            logger.info("watched_players + round_appearances tables ensured")
         finally:
             session.close()
     except Exception as e:

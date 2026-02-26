@@ -16,7 +16,6 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
-# Минимальное количество минут за сезон для включения в baseline перцентилей
 MIN_MINUTES_THRESHOLD = 200
 
 
@@ -38,23 +37,14 @@ def compute_round_analysis(
 ) -> Dict:
     """
     Главная точка входа: вычислить перцентили и скоры для тура.
-    
-    1. Определить доступные baselines (LEAGUE, TIER, BENCHMARK)
-    2. Для каждого baseline — batch-SQL перцентили
-    3. Агрегировать в round_scores
-    
-    Returns:
-        {"computed_baselines": [...], "players_processed": N, "warnings": [...]}
     """
     warnings = []
     computed_baselines = []
     total_players = 0
 
-    # Resolve actual tier season (may differ from the passed season)
     tier_season = _resolve_tier_season(db, tournament_id) or season
 
-    # --- 1. Resolve LEAGUE baseline (PER90 SEASON slice for this tournament) ---
-    league_slice_id = _find_league_baseline(db, tournament_id, season)
+    league_slice_id = _find_league_baseline(db, tournament_id, season=season)
     if league_slice_id:
         n = _compute_for_baseline(db, round_slice_id, league_slice_id, "LEAGUE", tournament_id)
         computed_baselines.append("LEAGUE")
@@ -63,7 +53,6 @@ def compute_round_analysis(
     else:
         warnings.append("Нет сезонных PER90 данных для LEAGUE baseline")
 
-    # --- 2. Resolve TIER baselines ---
     tier_result = _compute_tier_baseline(db, round_slice_id, tournament_id, tier_season)
     if tier_result:
         computed_baselines.append("TIER")
@@ -72,7 +61,6 @@ def compute_round_analysis(
     else:
         warnings.append("Тиры команд не настроены или нет данных для TIER baseline")
 
-    # --- 3. Resolve BENCHMARK baseline ---
     benchmark_slice_id = _find_benchmark_baseline(db, tournament_id)
     if benchmark_slice_id:
         n = _compute_for_baseline(db, round_slice_id, benchmark_slice_id, "BENCHMARK", tournament_id)
@@ -92,21 +80,14 @@ def compute_round_analysis(
 def compute_season_analysis(
     db: Session,
     tournament_id: int,
+    season: Optional[str] = None,
 ) -> Dict:
     """
     Вычислить перцентили и скоры для СЕЗОНА (стабильность на дистанции).
     
-    Каждый игрок из PER90 SEASON данных сравнивается со ВСЕМИ игроками
-    той же позиции в тех же PER90 SEASON данных.
-    
-    Это «рейтинг внутри позиции за весь сезон» — 
-    кто стабильно лучше на своей позиции в среднем за 90 минут.
-    
-    Результаты сохраняются в round_percentiles/round_scores 
-    с round_slice_id = PER90 SEASON slice_id, baseline_kind = 'SEASON'.
+    season: конкретный period_value сезона, если None — последний загруженный.
     """
-    # Find PER90 SEASON slice
-    per90_slice_id = _find_league_baseline(db, tournament_id, "")
+    per90_slice_id = _find_league_baseline(db, tournament_id, season=season)
     if not per90_slice_id:
         return {
             "computed": False,
@@ -116,28 +97,42 @@ def compute_season_analysis(
 
     logger.info(f"Computing season analysis for tournament {tournament_id}, slice {per90_slice_id}")
 
-    # Self-referential: source = baseline
-    # Each player's PER90 values are compared against ALL players at the same position
     n = _compute_for_baseline(
         db=db,
-        round_slice_id=per90_slice_id,       # source: PER90 SEASON
-        baseline_slice_id=per90_slice_id,     # baseline: same PER90 SEASON
-        baseline_kind="SEASON",               # new kind to distinguish from round LEAGUE
+        round_slice_id=per90_slice_id,
+        baseline_slice_id=per90_slice_id,
+        baseline_kind="SEASON",
         tournament_id=tournament_id,
     )
 
     logger.info(f"Season analysis complete: {n} players processed")
 
-    # --- BENCHMARK baseline for season ---
     computed_baselines = ["SEASON"]
+
+    # --- TIER baseline for season ---
+    tier_season = _resolve_tier_season(db, tournament_id)
+    if not tier_season and season:
+        tier_season = season
+    elif not tier_season:
+        pv_row = db.execute(text("""
+            SELECT period_value FROM stat_slices WHERE slice_id = :sid
+        """), {"sid": per90_slice_id}).fetchone()
+        tier_season = pv_row[0] if pv_row else str(__import__('datetime').datetime.now().year)
+
+    tier_players = _compute_tier_baseline(db, per90_slice_id, tournament_id, tier_season)
+    if tier_players:
+        computed_baselines.append("TIER")
+        logger.info(f"Season TIER baseline: {tier_players} players processed")
+
+    # --- BENCHMARK baseline for season ---
     benchmark_slice_id = _find_benchmark_baseline(db, tournament_id)
     benchmark_players = 0
     if benchmark_slice_id:
         benchmark_players = _compute_for_baseline(
             db=db,
-            round_slice_id=per90_slice_id,          # source: PER90 SEASON (current season players)
-            baseline_slice_id=benchmark_slice_id,    # baseline: benchmark season data
-            baseline_kind="SEASON_BENCHMARK",        # distinguish from round BENCHMARK
+            round_slice_id=per90_slice_id,
+            baseline_slice_id=benchmark_slice_id,
+            baseline_kind="SEASON_BENCHMARK",
             tournament_id=tournament_id,
         )
         computed_baselines.append("SEASON_BENCHMARK")
@@ -149,6 +144,7 @@ def compute_season_analysis(
         "slice_id": per90_slice_id,
         "computed_baselines": computed_baselines,
         "benchmark_players": benchmark_players,
+        "tier_players": tier_players or 0,
     }
 
 
@@ -156,20 +152,27 @@ def compute_season_analysis(
 # Internal helpers
 # ======================================================================
 
-def _find_league_baseline(db: Session, tournament_id: int, season: str) -> Optional[int]:
-    """Find the latest PER90 SEASON slice for this tournament.
-    
-    Note: period_value may be a round range like '1-15' or a year like '2025',
-    depending on how the data was uploaded. We just get the latest PER90 SEASON slice.
-    """
-    row = db.execute(text("""
-        SELECT slice_id FROM stat_slices
-        WHERE tournament_id = :tid
-          AND slice_type = 'PER90'
-          AND period_type = 'SEASON'
-        ORDER BY uploaded_at DESC
-        LIMIT 1
-    """), {"tid": tournament_id}).fetchone()
+def _find_league_baseline(db: Session, tournament_id: int, *, season: Optional[str] = None) -> Optional[int]:
+    """Find the PER90 SEASON slice for this tournament."""
+    if season:
+        row = db.execute(text("""
+            SELECT slice_id FROM stat_slices
+            WHERE tournament_id = :tid
+              AND slice_type = 'PER90'
+              AND period_type = 'SEASON'
+              AND period_value = :pv
+            ORDER BY uploaded_at DESC
+            LIMIT 1
+        """), {"tid": tournament_id, "pv": season}).fetchone()
+    else:
+        row = db.execute(text("""
+            SELECT slice_id FROM stat_slices
+            WHERE tournament_id = :tid
+              AND slice_type = 'PER90'
+              AND period_type = 'SEASON'
+            ORDER BY uploaded_at DESC
+            LIMIT 1
+        """), {"tid": tournament_id}).fetchone()
     return row[0] if row else None
 
 
@@ -190,14 +193,22 @@ def _compute_tier_baseline(
     season: str,
 ) -> Optional[int]:
     """
-    Compute TIER baseline: for each player in the round, compare against
-    the PER90 SEASON data filtered to their team's tier.
+    Compute TIER baseline using window functions.
+    Partitions by (tier, comparison_group, metric_code).
     """
-    league_slice_id = _find_league_baseline(db, tournament_id, season)
+    league_slice_id = _find_league_baseline(db, tournament_id, season=season)
     if not league_slice_id:
         return None
 
-    # Check if any tiers are assigned
+    # Auto-populate any missing teams into team_tiers (default tier='BOTTOM')
+    db.execute(text("""
+        INSERT INTO team_tiers (tournament_id, season, team_name, tier)
+        SELECT DISTINCT :tid, :season, p.team_name, 'BOTTOM'
+        FROM players p
+        WHERE p.tournament_id = :tid AND p.team_name IS NOT NULL AND p.team_name != ''
+        ON CONFLICT (tournament_id, season, team_name) DO NOTHING
+    """), {"tid": tournament_id, "season": season})
+
     tier_count = db.execute(text("""
         SELECT COUNT(*) FROM team_tiers
         WHERE tournament_id = :tid AND season = :season AND tier IS NOT NULL
@@ -206,9 +217,6 @@ def _compute_tier_baseline(
     if not tier_count or tier_count == 0:
         return None
 
-    # For each round player, find their team's tier, then compute percentile
-    # within that tier group
-    # First, delete old TIER percentiles for this round
     db.execute(text("""
         DELETE FROM round_percentiles WHERE round_slice_id = :rsid AND baseline_kind = 'TIER'
     """), {"rsid": round_slice_id})
@@ -216,7 +224,6 @@ def _compute_tier_baseline(
         DELETE FROM round_scores WHERE round_slice_id = :rsid AND baseline_kind = 'TIER'
     """), {"rsid": round_slice_id})
 
-    # Find TOTAL SEASON slice for minutes check
     total_season_sid = db.execute(text("""
         SELECT slice_id FROM stat_slices
         WHERE tournament_id = :tid AND slice_type = 'TOTAL' AND period_type = 'SEASON'
@@ -224,72 +231,79 @@ def _compute_tier_baseline(
     """), {"tid": tournament_id}).scalar()
     minutes_sid = total_season_sid or league_slice_id
 
-    # Batch compute: for each round player,
-    # the baseline is the subset of league players in the same tier AND comparison_group
-    # with minutes > MIN_MINUTES_THRESHOLD
     db.execute(text("""
+        WITH eligible_baseline AS (
+            SELECT DISTINCT bpm.player_id
+            FROM player_statistics bpm
+            WHERE bpm.slice_id = :minutes_sid
+              AND bpm.metric_code = 'minutes'
+              AND bpm.metric_value > :min_minutes
+        ),
+        combined AS (
+            SELECT
+                bpos.comparison_group,
+                bps.metric_code,
+                bps.metric_value,
+                btt.tier,
+                NULL::bigint AS round_player_id,
+                NULL::text AS round_position_code,
+                NULL::text AS round_bucket,
+                1 AS is_baseline
+            FROM player_statistics bps
+            JOIN players bp ON bp.player_id = bps.player_id
+            JOIN positions bpos ON bp.position_id = bpos.position_id
+            JOIN eligible_baseline eb ON bp.player_id = eb.player_id
+            JOIN team_tiers btt ON bp.team_name = btt.team_name
+                AND btt.tournament_id = :tid AND btt.season = :season
+            WHERE bps.slice_id = :baseline_sid
+              AND bps.metric_value IS NOT NULL
+              AND btt.tier IS NOT NULL
+
+            UNION ALL
+
+            SELECT
+                pos.comparison_group,
+                rps.metric_code,
+                rps.metric_value,
+                rtt.tier,
+                rp.player_id,
+                pos.code,
+                pmc.bucket,
+                0 AS is_baseline
+            FROM player_statistics rps
+            JOIN players rp ON rps.player_id = rp.player_id
+            JOIN positions pos ON rp.position_id = pos.position_id
+            JOIN position_metric_config pmc
+                ON pmc.position_code = pos.code AND pmc.metric_code = rps.metric_code
+            JOIN team_tiers rtt ON rp.team_name = rtt.team_name
+                AND rtt.tournament_id = :tid AND rtt.season = :season
+            WHERE rps.slice_id = :rsid
+              AND rps.metric_value IS NOT NULL
+              AND rtt.tier IS NOT NULL
+        ),
+        ranked AS (
+            SELECT *,
+                SUM(is_baseline) OVER (
+                    PARTITION BY tier, comparison_group, metric_code
+                ) AS total_baseline,
+                SUM(is_baseline) OVER (
+                    PARTITION BY tier, comparison_group, metric_code
+                    ORDER BY metric_value
+                    RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                ) AS baseline_lte
+            FROM combined
+        )
         INSERT INTO round_percentiles
             (round_slice_id, baseline_kind, player_id, position_code, metric_code, bucket, value, percentile)
         SELECT
-            :rsid AS round_slice_id,
-            'TIER' AS baseline_kind,
-            rp.player_id,
-            pos.code AS position_code,
-            rps.metric_code,
-            pmc.bucket,
-            rps.metric_value AS value,
+            :rsid, 'TIER',
+            round_player_id, round_position_code, metric_code, round_bucket, metric_value,
             CASE
-                WHEN bc.cnt = 0 OR bc.cnt IS NULL THEN NULL
-                ELSE (
-                    SELECT COUNT(*)::float FROM player_statistics bps
-                    JOIN players bp ON bp.player_id = bps.player_id
-                    JOIN positions bpos ON bp.position_id = bpos.position_id
-                    JOIN team_tiers btt ON bp.team_name = btt.team_name
-                        AND btt.tournament_id = :tid AND btt.season = :season
-                    WHERE bps.slice_id = :baseline_sid
-                      AND bps.metric_code = rps.metric_code
-                      AND bpos.comparison_group = pos.comparison_group
-                      AND btt.tier = rtt.tier
-                      AND bps.metric_value IS NOT NULL
-                      AND bps.metric_value <= rps.metric_value
-                      AND EXISTS (
-                          SELECT 1 FROM player_statistics bpm
-                          WHERE bpm.player_id = bp.player_id
-                            AND bpm.slice_id = :minutes_sid
-                            AND bpm.metric_code = 'minutes'
-                            AND bpm.metric_value > :min_minutes
-                      )
-                ) / NULLIF(bc.cnt, 0)
-            END AS percentile
-        FROM player_statistics rps
-        JOIN players rp ON rps.player_id = rp.player_id
-        JOIN positions pos ON rp.position_id = pos.position_id
-        JOIN position_metric_config pmc ON pmc.position_code = pos.code AND pmc.metric_code = rps.metric_code
-        LEFT JOIN team_tiers rtt ON rp.team_name = rtt.team_name
-            AND rtt.tournament_id = :tid AND rtt.season = :season
-        LEFT JOIN LATERAL (
-            SELECT COUNT(*)::float AS cnt
-            FROM player_statistics bps2
-            JOIN players bp2 ON bp2.player_id = bps2.player_id
-            JOIN positions bpos2 ON bp2.position_id = bpos2.position_id
-            JOIN team_tiers btt2 ON bp2.team_name = btt2.team_name
-                AND btt2.tournament_id = :tid AND btt2.season = :season
-            WHERE bps2.slice_id = :baseline_sid
-              AND bps2.metric_code = rps.metric_code
-              AND bpos2.comparison_group = pos.comparison_group
-              AND btt2.tier = rtt.tier
-              AND bps2.metric_value IS NOT NULL
-              AND EXISTS (
-                  SELECT 1 FROM player_statistics bpm2
-                  WHERE bpm2.player_id = bp2.player_id
-                    AND bpm2.slice_id = :minutes_sid
-                    AND bpm2.metric_code = 'minutes'
-                    AND bpm2.metric_value > :min_minutes
-              )
-        ) bc ON true
-        WHERE rps.slice_id = :rsid
-          AND rps.metric_value IS NOT NULL
-          AND rtt.tier IS NOT NULL
+                WHEN total_baseline = 0 THEN NULL
+                ELSE baseline_lte::float / total_baseline
+            END
+        FROM ranked
+        WHERE is_baseline = 0 AND round_player_id IS NOT NULL
     """), {
         "rsid": round_slice_id,
         "tid": tournament_id,
@@ -299,7 +313,6 @@ def _compute_tier_baseline(
         "min_minutes": MIN_MINUTES_THRESHOLD,
     })
 
-    # Now aggregate scores for TIER
     n = _aggregate_scores(db, round_slice_id, "TIER", tournament_id)
     db.commit()
     return n
@@ -314,12 +327,14 @@ def _compute_for_baseline(
     team_filter: Optional[List[str]] = None,
 ) -> int:
     """
-    Batch-compute percentiles for all round players against a baseline slice.
-    Then aggregate into round_scores.
+    Batch-compute percentiles using window functions (MUCH faster than correlated subqueries).
     
-    Returns number of players processed.
+    Strategy:
+    1. UNION ALL baseline values (is_baseline=1) and round player values (is_baseline=0)
+    2. Use SUM(is_baseline) window function with ORDER BY metric_value to count
+       baseline values <= each row's value in a single pass
+    3. Percentile = baseline_lte / total_baseline
     """
-    # Delete old results
     db.execute(text("""
         DELETE FROM round_percentiles WHERE round_slice_id = :rsid AND baseline_kind = :bk
     """), {"rsid": round_slice_id, "bk": baseline_kind})
@@ -327,24 +342,8 @@ def _compute_for_baseline(
         DELETE FROM round_scores WHERE round_slice_id = :rsid AND baseline_kind = :bk
     """), {"rsid": round_slice_id, "bk": baseline_kind})
 
-    # Batch insert percentiles using a single SQL statement
-    # For each round player's metric, count how many baseline players
-    # in the same COMPARISON GROUP have a value <= the round player's value
-    # (comparison_group объединяет схожие позиции, например З Ц + З ЛЦ + З ПЦ = ЦЗ)
-    #
-    # ВАЖНО: в baseline включаются только игроки с minutes > MIN_MINUTES_THRESHOLD
-    # Это отсекает игроков с малым игровым временем, чья PER90 статистика нерепрезентативна
-    #
-    # Для определения минут используем TOTAL SEASON слайс того же турнира
-    # (в PER90 слайсе минуты тоже есть, но TOTAL надёжнее — это реальные минуты)
-    
-    # For BENCHMARK baselines: players in the benchmark file are from a different
-    # season, so the minutes filter should use the benchmark's own data.
-    # We set min_minutes to 0 to effectively skip the filter for benchmark populations,
-    # since all players in an uploaded benchmark file are assumed to have sufficient data.
     is_benchmark_baseline = baseline_kind in ("BENCHMARK", "SEASON_BENCHMARK")
-    
-    # Find the TOTAL SEASON slice for minutes lookup (used for current season's players)
+
     total_season_sid = db.execute(text("""
         SELECT ss2.slice_id FROM stat_slices ss2
         JOIN stat_slices ss1 ON ss1.tournament_id = ss2.tournament_id
@@ -352,70 +351,79 @@ def _compute_for_baseline(
           AND ss2.slice_type = 'TOTAL' AND ss2.period_type = 'SEASON'
         ORDER BY ss2.uploaded_at DESC LIMIT 1
     """), {"baseline_sid": baseline_slice_id}).scalar()
-    
-    # If no TOTAL SEASON slice, use baseline itself for minutes
+
     minutes_sid = total_season_sid or baseline_slice_id
-    
-    # For benchmark: use the benchmark slice itself as minutes source
-    # and set threshold to 0 so all benchmark players are included
     if is_benchmark_baseline:
         minutes_sid = baseline_slice_id
     baseline_min_minutes = 0 if is_benchmark_baseline else MIN_MINUTES_THRESHOLD
-    
+
     db.execute(text("""
+        WITH eligible_baseline AS (
+            SELECT DISTINCT bpm.player_id
+            FROM player_statistics bpm
+            WHERE bpm.slice_id = :minutes_sid
+              AND bpm.metric_code = 'minutes'
+              AND bpm.metric_value > :min_minutes
+        ),
+        combined AS (
+            -- Baseline values
+            SELECT
+                bpos.comparison_group,
+                bps.metric_code,
+                bps.metric_value,
+                NULL::bigint AS round_player_id,
+                NULL::text AS round_position_code,
+                NULL::text AS round_bucket,
+                1 AS is_baseline
+            FROM player_statistics bps
+            JOIN players bp ON bp.player_id = bps.player_id
+            JOIN positions bpos ON bp.position_id = bpos.position_id
+            JOIN eligible_baseline eb ON bp.player_id = eb.player_id
+            WHERE bps.slice_id = :baseline_sid
+              AND bps.metric_value IS NOT NULL
+
+            UNION ALL
+
+            -- Round player values (only metrics in position config)
+            SELECT
+                pos.comparison_group,
+                rps.metric_code,
+                rps.metric_value,
+                rp.player_id,
+                pos.code,
+                pmc.bucket,
+                0 AS is_baseline
+            FROM player_statistics rps
+            JOIN players rp ON rps.player_id = rp.player_id
+            JOIN positions pos ON rp.position_id = pos.position_id
+            JOIN position_metric_config pmc
+                ON pmc.position_code = pos.code AND pmc.metric_code = rps.metric_code
+            WHERE rps.slice_id = :rsid
+              AND rps.metric_value IS NOT NULL
+        ),
+        ranked AS (
+            SELECT *,
+                SUM(is_baseline) OVER (
+                    PARTITION BY comparison_group, metric_code
+                ) AS total_baseline,
+                SUM(is_baseline) OVER (
+                    PARTITION BY comparison_group, metric_code
+                    ORDER BY metric_value
+                    RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                ) AS baseline_lte
+            FROM combined
+        )
         INSERT INTO round_percentiles
             (round_slice_id, baseline_kind, player_id, position_code, metric_code, bucket, value, percentile)
         SELECT
-            :rsid AS round_slice_id,
-            :bk AS baseline_kind,
-            rp.player_id,
-            pos.code AS position_code,
-            rps.metric_code,
-            pmc.bucket,
-            rps.metric_value AS value,
+            :rsid, :bk,
+            round_player_id, round_position_code, metric_code, round_bucket, metric_value,
             CASE
-                WHEN bc.cnt = 0 OR bc.cnt IS NULL THEN NULL
-                ELSE (
-                    SELECT COUNT(*)::float FROM player_statistics bps
-                    JOIN players bp ON bp.player_id = bps.player_id
-                    JOIN positions bpos ON bp.position_id = bpos.position_id
-                    WHERE bps.slice_id = :baseline_sid
-                      AND bps.metric_code = rps.metric_code
-                      AND bpos.comparison_group = pos.comparison_group
-                      AND bps.metric_value IS NOT NULL
-                      AND bps.metric_value <= rps.metric_value
-                      AND EXISTS (
-                          SELECT 1 FROM player_statistics bpm
-                          WHERE bpm.player_id = bp.player_id
-                            AND bpm.slice_id = :minutes_sid
-                            AND bpm.metric_code = 'minutes'
-                            AND bpm.metric_value > :min_minutes
-                      )
-                ) / NULLIF(bc.cnt, 0)
-            END AS percentile
-        FROM player_statistics rps
-        JOIN players rp ON rps.player_id = rp.player_id
-        JOIN positions pos ON rp.position_id = pos.position_id
-        JOIN position_metric_config pmc ON pmc.position_code = pos.code AND pmc.metric_code = rps.metric_code
-        LEFT JOIN LATERAL (
-            SELECT COUNT(*)::float AS cnt
-            FROM player_statistics bps2
-            JOIN players bp2 ON bp2.player_id = bps2.player_id
-            JOIN positions bpos2 ON bp2.position_id = bpos2.position_id
-            WHERE bps2.slice_id = :baseline_sid
-              AND bps2.metric_code = rps.metric_code
-              AND bpos2.comparison_group = pos.comparison_group
-              AND bps2.metric_value IS NOT NULL
-              AND EXISTS (
-                  SELECT 1 FROM player_statistics bpm2
-                  WHERE bpm2.player_id = bp2.player_id
-                    AND bpm2.slice_id = :minutes_sid
-                    AND bpm2.metric_code = 'minutes'
-                    AND bpm2.metric_value > :min_minutes
-              )
-        ) bc ON true
-        WHERE rps.slice_id = :rsid
-          AND rps.metric_value IS NOT NULL
+                WHEN total_baseline = 0 THEN NULL
+                ELSE baseline_lte::float / total_baseline
+            END
+        FROM ranked
+        WHERE is_baseline = 0 AND round_player_id IS NOT NULL
     """), {
         "rsid": round_slice_id,
         "bk": baseline_kind,
@@ -424,7 +432,6 @@ def _compute_for_baseline(
         "min_minutes": baseline_min_minutes,
     })
 
-    # Aggregate scores
     n = _aggregate_scores(db, round_slice_id, baseline_kind, tournament_id)
     db.commit()
     return n
@@ -433,18 +440,7 @@ def _compute_for_baseline(
 def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tournament_id: int = 0) -> int:
     """
     Aggregate round_percentiles into round_scores.
-    Implements:
-        - top-k averaging for core/support
-        - coverage calculation
-        - adjusted scores
-        - total_score = 0.7 * core_adj + 0.3 * support_adj
-        - good_share_core
-        - insufficient_data flag
-        - risk_flags
-    
-    Returns number of players with scores.
     """
-    # Get all percentile rows for this round/baseline
     rows = db.execute(text("""
         SELECT rp.player_id, rp.position_code, rp.metric_code, rp.bucket, rp.percentile, rp.value
         FROM round_percentiles rp
@@ -455,8 +451,6 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
     if not rows:
         return 0
 
-    # Fetch season minutes for all players in this tournament
-    # to determine insufficient_minutes flag
     player_minutes: Dict[int, float] = {}
     total_season_sid = db.execute(text("""
         SELECT ss2.slice_id FROM stat_slices ss2
@@ -473,7 +467,6 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
         for mr in min_rows:
             player_minutes[mr[0]] = mr[1]
     else:
-        # Fallback: try PER90 SEASON slice (it may also have minutes)
         per90_sid = db.execute(text("""
             SELECT ss2.slice_id FROM stat_slices ss2
             JOIN stat_slices ss1 ON ss1.tournament_id = ss2.tournament_id
@@ -489,7 +482,6 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
             for mr in min_rows:
                 player_minutes[mr[0]] = mr[1]
 
-    # Get total metrics per position from config
     pos_totals = {}
     config_rows = db.execute(text("""
         SELECT position_code, bucket, COUNT(*) as cnt
@@ -502,7 +494,6 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
             pos_totals[pos] = {"core": 0, "support": 0, "risk": 0}
         pos_totals[pos][r[1]] = r[2]
 
-    # Group by player
     from collections import defaultdict
     players = defaultdict(lambda: {"position_code": None, "core": [], "support": [], "risk": []})
 
@@ -517,7 +508,6 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
         if percentile is not None:
             players[player_id][bucket].append({"percentile": percentile, "metric": r[2], "value": value})
 
-    # Compute scores for each player
     count = 0
     for player_id, data in players.items():
         position_code = data["position_code"]
@@ -534,7 +524,6 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
         core_coverage = used_core / total_core if total_core > 0 else 0
         support_coverage = used_support / total_support if total_support > 0 else 0
 
-        # Core score: mean of top-k, where k = max(3, ceil(0.6 * used_core))
         if used_core > 0:
             k_core = max(3, math.ceil(0.6 * used_core))
             top_k_core = core_pcts[:min(k_core, used_core)]
@@ -542,7 +531,6 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
         else:
             core_score = 0
 
-        # Support score: similar
         if used_support > 0:
             k_support = max(3, math.ceil(0.6 * used_support))
             top_k_support = support_pcts[:min(k_support, used_support)]
@@ -550,28 +538,21 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
         else:
             support_score = 0
 
-        # Adjusted scores (soft penalty for low coverage)
         core_score_adj = core_score * (0.5 + 0.5 * core_coverage)
         support_score_adj = support_score * (0.5 + 0.5 * support_coverage)
 
-        # Total score
         total_score = 0.7 * core_score_adj + 0.3 * support_score_adj
 
-        # Good share core: % of core metrics with percentile >= 0.80
         good_share_core = 0
         if used_core > 0:
             good_count = sum(1 for p in core_pcts if p >= 0.80)
             good_share_core = good_count / used_core
 
-        # Insufficient data flag
         insufficient_data = (used_core < 4 or core_coverage < 0.6)
 
-        # Insufficient minutes flag: player has < MIN_MINUTES_THRESHOLD minutes in season
         player_min = player_minutes.get(player_id, 0)
-        # "более 200 минут" = строго > 200, значит <= 200 = insufficient
         insufficient_minutes = (player_min <= MIN_MINUTES_THRESHOLD)
 
-        # Risk flags from risk metrics
         risk_flags = {}
         for rm in data["risk"]:
             metric = rm["metric"]

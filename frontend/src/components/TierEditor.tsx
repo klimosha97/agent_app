@@ -18,7 +18,7 @@ interface Props {
 
 interface TeamTier {
   team_name: string;
-  tier: 'TOP' | 'BOTTOM' | null;
+  tier: 'TOP' | 'BOTTOM';
 }
 
 export const TierEditor: React.FC<Props> = ({ isOpen, onClose, tournamentId, tournamentName }) => {
@@ -32,25 +32,27 @@ export const TierEditor: React.FC<Props> = ({ isOpen, onClose, tournamentId, tou
     { enabled: isOpen }
   );
 
-  // Auto-populate teams from DB if none exist
-  const [populated, setPopulated] = useState(false);
+  // Always sync teams when opening the modal (add new, remove gone, keep existing tiers)
+  const [synced, setSynced] = useState(false);
   useEffect(() => {
-    if (isOpen && data?.data && data.data.length === 0 && !populated) {
-      setPopulated(true);
+    if (isOpen && !synced) {
+      setSynced(true);
       apiService.populateTeamTiers(tournamentId).then(() => {
         refetch();
       }).catch(console.error);
     }
-  }, [isOpen, data, populated, tournamentId, refetch]);
+  }, [isOpen, synced, tournamentId, refetch]);
 
-  // Reset populated flag when modal closes
   useEffect(() => {
-    if (!isOpen) setPopulated(false);
+    if (!isOpen) setSynced(false);
   }, [isOpen]);
 
   useEffect(() => {
     if (data?.data) {
-      setLocalTeams(data.data);
+      setLocalTeams(data.data.map((t: any) => ({
+        ...t,
+        tier: t.tier || 'BOTTOM',
+      })));
     }
   }, [data]);
 
@@ -72,9 +74,8 @@ export const TierEditor: React.FC<Props> = ({ isOpen, onClose, tournamentId, tou
 
   const topTeams = localTeams.filter((t) => t.tier === 'TOP');
   const bottomTeams = localTeams.filter((t) => t.tier === 'BOTTOM');
-  const unassigned = localTeams.filter((t) => !t.tier);
 
-  const moveTo = (teamName: string, tier: 'TOP' | 'BOTTOM' | null) => {
+  const moveTo = (teamName: string, tier: 'TOP' | 'BOTTOM') => {
     setLocalTeams((prev) =>
       prev.map((t) => (t.team_name === teamName ? { ...t, tier } : t))
     );
@@ -88,7 +89,7 @@ export const TierEditor: React.FC<Props> = ({ isOpen, onClose, tournamentId, tou
     setDragItem(teamName);
   };
 
-  const handleDrop = (tier: 'TOP' | 'BOTTOM' | null) => {
+  const handleDrop = (tier: 'TOP' | 'BOTTOM') => {
     if (dragItem) {
       moveTo(dragItem, tier);
       setDragItem(null);
@@ -124,15 +125,6 @@ export const TierEditor: React.FC<Props> = ({ isOpen, onClose, tournamentId, tou
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
-            </button>
-          )}
-          {team.tier && (
-            <button
-              onClick={() => moveTo(team.team_name, null)}
-              className="p-1 text-gray-400 hover:bg-gray-100 rounded"
-              title="Убрать из корзины"
-            >
-              <XMarkIcon className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -177,24 +169,6 @@ export const TierEditor: React.FC<Props> = ({ isOpen, onClose, tournamentId, tou
           <div className="flex items-center justify-center py-20 text-gray-500">Загрузка...</div>
         ) : (
           <div className="flex-1 overflow-y-auto p-6">
-            {/* Unassigned */}
-            {unassigned.length > 0 && (
-              <div
-                className="mb-6"
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => handleDrop(null)}
-              >
-                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  Не распределены ({unassigned.length})
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 p-3 bg-gray-50 rounded-lg border border-dashed border-gray-300 min-h-[60px]">
-                  {unassigned.map((team) => (
-                    <TeamCard key={team.team_name} team={team} />
-                  ))}
-                </div>
-              </div>
-            )}
-
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* TOP */}
               <div

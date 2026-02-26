@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useQuery } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { 
   ArrowLeftIcon, 
   UserIcon,
@@ -17,7 +17,10 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   FlagIcon,
-  ChartBarIcon
+  ChartBarIcon,
+  UserPlusIcon,
+  EyeIcon,
+  CheckCircleIcon,
 } from '@heroicons/react/24/outline';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -188,7 +191,7 @@ export const PlayerProfile: React.FC<PlayerProfileProps> = ({ playerId, onBack }
                   </span>
                 </div>
                 <div className="flex items-center space-x-3 mt-3">
-                  <Badge variant="primary" size="lg" className="bg-white/20 text-white border-white/30">
+                  <Badge variant="blue" size="lg" className="bg-white/20 text-white border-white/30">
                     {player.position_code}
                   </Badge>
                   <span className="text-sm text-blue-200">{player.position_name}</span>
@@ -479,19 +482,34 @@ interface PercentileSectionProps {
   formatValue: (v: number | null, dt: string) => string;
 }
 
+const SEASON_BASELINES = [
+  { key: 'season', label: 'Вся лига' },
+  { key: 'season_tier', label: 'По корзине' },
+  { key: 'season_benchmark', label: 'Эталон' },
+];
+const ROUND_BASELINES = [
+  { key: 'round', label: 'Вся лига' },
+  { key: 'round_tier', label: 'По корзине' },
+  { key: 'round_benchmark', label: 'Эталон' },
+];
+
 const PercentileSection: React.FC<PercentileSectionProps> = ({
   pctData, isLoading, pctRound, setPctRound, formatValue,
 }) => {
   const [activeTab, setActiveTab] = useState<'season' | 'round'>('season');
+  const [seasonBaseline, setSeasonBaseline] = useState('season');
+  const [roundBaseline, setRoundBaseline] = useState('round');
 
   if (!pctData && !isLoading) return null;
 
-  const seasonData = pctData?.season;
-  const roundData = pctData?.round;
   const availableRounds: number[] = pctData?.available_rounds || [];
   const posInfo = pctData?.player;
 
-  const currentBaseline = activeTab === 'season' ? seasonData : roundData;
+  const currentBaselineKey = activeTab === 'season' ? seasonBaseline : roundBaseline;
+  const currentBaseline = pctData?.[currentBaselineKey];
+  const baselineOptions = activeTab === 'season' ? SEASON_BASELINES : ROUND_BASELINES;
+  const activeBaselineKey = activeTab === 'season' ? seasonBaseline : roundBaseline;
+  const setActiveBaseline = activeTab === 'season' ? setSeasonBaseline : setRoundBaseline;
 
   // Group metrics by bucket
   const metricsByBucket: Record<string, any[]> = { core: [], support: [], risk: [] };
@@ -521,8 +539,8 @@ const PercentileSection: React.FC<PercentileSectionProps> = ({
             </CardTitle>
             <p className="text-xs text-gray-500 mt-1">
               {activeTab === 'season'
-                ? 'Сравнение PER90 за весь сезон со всеми игроками позиции'
-                : `Сравнение показателей тура ${pctRound} с PER90 сезона`}
+                ? `PER90 за сезон — ${baselineOptions.find(b => b.key === activeBaselineKey)?.label || ''}`
+                : `Тур ${pctRound} — ${baselineOptions.find(b => b.key === activeBaselineKey)?.label || ''}`}
             </p>
           </div>
 
@@ -546,6 +564,29 @@ const PercentileSection: React.FC<PercentileSectionProps> = ({
               >
                 За тур
               </button>
+            </div>
+
+            {/* Baseline selector */}
+            <div className="flex bg-white rounded-lg p-0.5 shadow-sm border">
+              {baselineOptions.map(b => {
+                const isAvailable = !!pctData?.[b.key];
+                return (
+                  <button
+                    key={b.key}
+                    onClick={() => setActiveBaseline(b.key)}
+                    disabled={!isAvailable}
+                    className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-all ${
+                      activeBaselineKey === b.key
+                        ? 'bg-indigo-500 text-white shadow'
+                        : isAvailable
+                          ? 'text-gray-600 hover:text-gray-900'
+                          : 'text-gray-300 cursor-not-allowed'
+                    }`}
+                  >
+                    {b.label}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Round selector */}
@@ -576,9 +617,13 @@ const PercentileSection: React.FC<PercentileSectionProps> = ({
         ) : !currentBaseline ? (
           <div className="text-center py-12 text-gray-500">
             <p className="text-sm">
-              {activeTab === 'season'
-                ? 'Нет сезонных перцентилей. Загрузите PER90 данные и пересчитайте анализ.'
-                : 'Нет данных за этот тур. Выберите другой тур или загрузите данные.'}
+              {activeBaselineKey.includes('tier')
+                ? 'Нет данных по корзине. Настройте корзины и пересчитайте анализ.'
+                : activeBaselineKey.includes('benchmark')
+                  ? 'Нет данных по эталону. Настройте эталонный сезон и пересчитайте анализ.'
+                  : activeTab === 'season'
+                    ? 'Нет сезонных перцентилей. Загрузите PER90 данные и пересчитайте анализ.'
+                    : 'Нет данных за этот тур. Выберите другой тур или загрузите данные.'}
             </p>
           </div>
         ) : (

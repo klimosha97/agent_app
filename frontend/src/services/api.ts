@@ -192,14 +192,20 @@ class ApiService {
     sortField?: string,
     sortOrder?: 'asc' | 'desc',
     periodType: 'SEASON' | 'ROUND' = 'SEASON',
-    roundNumber?: number
+    roundNumber?: number,
+    currentSeasonOnly: boolean = true,
+    season?: string
   ): Promise<PlayerListResponse> {
     const params = new URLSearchParams();
     params.append('page', page.toString());
     params.append('limit', limit.toString());
     params.append('slice_type', sliceType);
     params.append('period_type', periodType);
+    params.append('current_season_only', currentSeasonOnly.toString());
     
+    if (season) {
+      params.append('season', season);
+    }
     if (search) {
       params.append('search', search);
     }
@@ -280,7 +286,7 @@ class ApiService {
   }
 
   async clearDatabase(): Promise<any> {
-    const response = await this.api.post('/database/clear');
+    const response = await this.api.post('/database/clear?confirm=true');
     return response.data;
   }
 
@@ -544,10 +550,19 @@ class ApiService {
   }
 
   /**
+   * Получить список доступных сезонов для турнира
+   */
+  async getAvailableSeasons(tournamentId: number): Promise<any> {
+    const response = await this.api.get(`/seasons/${tournamentId}`);
+    return response.data;
+  }
+
+  /**
    * Пересчитать сезонный анализ (стабильность за весь сезон)
    */
-  async recomputeSeasonAnalysis(tournamentId: number): Promise<any> {
-    const response = await this.api.post(`/season/${tournamentId}/recompute`);
+  async recomputeSeasonAnalysis(tournamentId: number, season?: string): Promise<any> {
+    const params = season ? `?season=${season}` : '';
+    const response = await this.api.post(`/season/${tournamentId}/recompute${params}`);
     return response.data;
   }
 
@@ -556,12 +571,13 @@ class ApiService {
    */
   async getSeasonTopByPosition(
     tournamentId: number,
-    options?: { sort_by?: string; funnel?: string; baseline_kind?: string; limit_per_position?: number }
+    options?: { sort_by?: string; funnel?: string; baseline_kind?: string; season?: string; limit_per_position?: number }
   ): Promise<any> {
     const params = new URLSearchParams();
     if (options?.sort_by) params.append('sort_by', options.sort_by);
     if (options?.funnel) params.append('funnel', options.funnel);
     if (options?.baseline_kind) params.append('baseline_kind', options.baseline_kind);
+    if (options?.season) params.append('season', options.season);
     if (options?.limit_per_position) params.append('limit_per_position', options.limit_per_position.toString());
     const response = await this.api.get(`/season/${tournamentId}/top-by-position?${params}`);
     return response.data;
@@ -572,12 +588,13 @@ class ApiService {
    */
   async getSeasonTop(
     tournamentId: number,
-    options?: { sort_by?: string; funnel?: string; baseline_kind?: string; position_code?: string; limit?: number }
+    options?: { sort_by?: string; funnel?: string; baseline_kind?: string; season?: string; position_code?: string; limit?: number }
   ): Promise<any> {
     const params = new URLSearchParams();
     if (options?.sort_by) params.append('sort_by', options.sort_by);
     if (options?.funnel) params.append('funnel', options.funnel);
     if (options?.baseline_kind) params.append('baseline_kind', options.baseline_kind);
+    if (options?.season) params.append('season', options.season);
     if (options?.position_code) params.append('position_code', options.position_code);
     if (options?.limit) params.append('limit', options.limit.toString());
     const response = await this.api.get(`/season/${tournamentId}/top?${params}`);
@@ -667,6 +684,28 @@ class ApiService {
 
   // === Служебные методы ===
 
+  // === Watched Players (MY / TRACKED) ===
+
+  async getWatchedPlayers(listType: 'MY' | 'TRACKED'): Promise<any> {
+    const response = await this.api.get(`/watched-players/${listType}`);
+    return response.data;
+  }
+
+  async addWatchedPlayer(playerId: number, listType: 'MY' | 'TRACKED', notes?: string): Promise<any> {
+    const response = await this.api.post('/watched-players', { player_id: playerId, list_type: listType, notes });
+    return response.data;
+  }
+
+  async removeWatchedPlayer(playerId: number, listType: 'MY' | 'TRACKED'): Promise<any> {
+    const response = await this.api.delete(`/watched-players/${listType}/${playerId}`);
+    return response.data;
+  }
+
+  async checkWatchedStatus(playerId: number): Promise<any> {
+    const response = await this.api.get(`/watched-players/check/${playerId}`);
+    return response.data;
+  }
+
   async checkHealth(): Promise<any> {
     const response = await this.api.get('/health', { baseURL: this.baseURL.replace('/api', '') });
     return response.data;
@@ -674,6 +713,17 @@ class ApiService {
 
   async getAppInfo(): Promise<any> {
     const response = await this.api.get('/info', { baseURL: this.baseURL.replace('/api', '') });
+    return response.data;
+  }
+
+  // === New Faces ===
+
+  async getNewFaces(tournamentId: number, season?: string, roundNumber?: number): Promise<any> {
+    const params = new URLSearchParams();
+    if (season) params.append('season', season);
+    if (roundNumber) params.append('round', String(roundNumber));
+    const qs = params.toString();
+    const response = await this.api.get(`/new-faces/${tournamentId}${qs ? '?' + qs : ''}`);
     return response.data;
   }
 

@@ -70,53 +70,82 @@ async def get_team_tiers(
     return {"success": True, "data": teams, "tournament_id": tournament_id, "season": season}
 
 
-@router.post("/tiers/{tournament_id}/populate", summary="Заполнить список команд из БД")
+def _sync_team_tiers(db: Session, tournament_id: int, season: str) -> dict:
+    """
+    Smart sync of team_tiers:
+    - Teams still in players → keep their existing tier
+    - New teams (not in team_tiers) → add with tier='BOTTOM'
+    - Teams gone from players → remove from team_tiers
+    """
+    current_rows = db.execute(text("""
+        SELECT DISTINCT team_name FROM players
+        WHERE tournament_id = :tid AND team_name IS NOT NULL AND team_name != ''
+    """), {"tid": tournament_id}).fetchall()
+    current_teams = {r[0] for r in current_rows}
+
+    existing_rows = db.execute(text("""
+        SELECT team_name, tier FROM team_tiers
+        WHERE tournament_id = :tid AND season = :season
+    """), {"tid": tournament_id, "season": season}).fetchall()
+    existing_map = {r[0]: r[1] for r in existing_rows}
+
+    gone_teams = set(existing_map.keys()) - current_teams
+    new_teams = current_teams - set(existing_map.keys())
+
+    for team in gone_teams:
+        db.execute(text("""
+            DELETE FROM team_tiers
+            WHERE tournament_id = :tid AND season = :season AND team_name = :tn
+        """), {"tid": tournament_id, "season": season, "tn": team})
+
+    for team in new_teams:
+        db.execute(text("""
+            INSERT INTO team_tiers (tournament_id, season, team_name, tier)
+            VALUES (:tid, :season, :tn, 'BOTTOM')
+            ON CONFLICT (tournament_id, season, team_name) DO NOTHING
+        """), {"tid": tournament_id, "season": season, "tn": team})
+
+    # Fix any legacy NULL tiers → BOTTOM
+    db.execute(text("""
+        UPDATE team_tiers SET tier = 'BOTTOM'
+        WHERE tournament_id = :tid AND season = :season AND tier IS NULL
+    """), {"tid": tournament_id, "season": season})
+
+    kept = len(current_teams & set(existing_map.keys()))
+    return {"kept": kept, "added": len(new_teams), "removed": len(gone_teams),
+            "added_teams": sorted(new_teams), "removed_teams": sorted(gone_teams)}
+
+
+@router.post("/tiers/{tournament_id}/populate", summary="Синхронизировать список команд из БД")
 async def populate_team_tiers(
     tournament_id: int = Path(..., ge=0, le=3),
     db: Session = Depends(get_db),
 ):
     """
-    Заполнить team_tiers уникальными командами из таблицы players для турнира.
-    Не перезаписывает уже назначенные корзины.
+    Синхронизировать team_tiers с актуальными командами из таблицы players.
+    - Новые команды добавляются в нижнюю корзину (BOTTOM)
+    - Команды, которых больше нет → удаляются
+    - Существующие корзины сохраняются
     """
     season = _get_season(db, tournament_id)
-    
-    # If no teams exist yet, try to detect season from PER90 SEASON slice
-    existing = db.execute(text("""
-        SELECT COUNT(*) FROM team_tiers WHERE tournament_id = :tid
-    """), {"tid": tournament_id}).scalar()
-    
-    if not existing or existing == 0:
-        # Determine season from the latest PER90 SEASON slice
-        pv_row = db.execute(text("""
-            SELECT period_value FROM stat_slices
-            WHERE tournament_id = :tid AND slice_type = 'PER90' AND period_type = 'SEASON'
-            ORDER BY uploaded_at DESC LIMIT 1
-        """), {"tid": tournament_id}).fetchone()
-        if pv_row and pv_row[0]:
-            season = pv_row[0]
-    
-    result = db.execute(text("""
-        INSERT INTO team_tiers (tournament_id, season, team_name, tier)
-        SELECT DISTINCT :tid, :season, p.team_name, NULL
-        FROM players p
-        WHERE p.tournament_id = :tid
-          AND p.team_name IS NOT NULL
-          AND p.team_name != ''
-        ON CONFLICT (tournament_id, season, team_name) DO NOTHING
-    """), {"tid": tournament_id, "season": season})
+
+    result = _sync_team_tiers(db, tournament_id, season)
     db.commit()
-    
+
     total = db.execute(text("""
         SELECT COUNT(*) FROM team_tiers WHERE tournament_id = :tid AND season = :season
     """), {"tid": tournament_id, "season": season}).scalar()
-    
+
     return {
         "success": True,
-        "new_teams": result.rowcount,
+        "new_teams": result["added"],
+        "removed_teams": result["removed"],
+        "kept_teams": result["kept"],
         "total_teams": total,
         "season": season,
-        "message": f"Добавлено {result.rowcount} новых команд, всего {total}",
+        "added_list": result["added_teams"],
+        "removed_list": result["removed_teams"],
+        "message": f"Синхронизировано: +{result['added']} новых, -{result['removed']} удалено, {result['kept']} без изменений",
     }
 
 
@@ -128,7 +157,7 @@ async def update_team_tiers(
 ):
     """
     Принять массив {teams: [{team_name, tier}, ...]} и UPSERT.
-    tier может быть 'TOP', 'BOTTOM' или null.
+    tier должен быть 'TOP' или 'BOTTOM'.
     """
     if not body or "teams" not in body:
         raise HTTPException(status_code=400, detail="Body must contain 'teams' array")
@@ -138,11 +167,11 @@ async def update_team_tiers(
 
     for item in body["teams"]:
         team_name = item.get("team_name")
-        tier = item.get("tier")
+        tier = item.get("tier") or "BOTTOM"
         if not team_name:
             continue
 
-        if tier and tier not in ("TOP", "BOTTOM"):
+        if tier not in ("TOP", "BOTTOM"):
             raise HTTPException(status_code=400, detail=f"Invalid tier '{tier}'. Must be TOP or BOTTOM")
 
         db.execute(text("""
@@ -335,9 +364,44 @@ async def recompute_round_analysis(
 # Phase 4.6: Season analysis (стабильность за весь сезон)
 # ======================================================================
 
+@router.get("/seasons/{tournament_id}", summary="Список доступных сезонов")
+async def get_available_seasons(
+    tournament_id: int = Path(..., ge=0, le=3),
+    db: Session = Depends(get_db),
+):
+    """Получить список всех загруженных сезонов для турнира."""
+    rows = db.execute(text("""
+        SELECT
+            ss.period_value,
+            ss.uploaded_at,
+            COUNT(DISTINCT ps.player_id) as players_count,
+            MAX(CASE WHEN rs.player_id IS NOT NULL THEN 1 ELSE 0 END) as has_scores
+        FROM stat_slices ss
+        LEFT JOIN player_statistics ps ON ps.slice_id = ss.slice_id
+        LEFT JOIN round_scores rs ON rs.round_slice_id = ss.slice_id AND rs.baseline_kind = 'SEASON'
+        WHERE ss.tournament_id = :tid
+          AND ss.slice_type = 'PER90'
+          AND ss.period_type = 'SEASON'
+        GROUP BY ss.period_value, ss.uploaded_at, ss.slice_id
+        ORDER BY ss.uploaded_at DESC
+    """), {"tid": tournament_id}).fetchall()
+
+    seasons = []
+    for r in rows:
+        seasons.append({
+            "period_value": r[0],
+            "uploaded_at": r[1].isoformat() if r[1] else None,
+            "players_count": r[2] or 0,
+            "has_scores": bool(r[3]),
+        })
+
+    return {"success": True, "data": seasons, "current": seasons[0]["period_value"] if seasons else None}
+
+
 @router.post("/season/{tournament_id}/recompute", summary="Пересчитать сезонный анализ")
 async def recompute_season_analysis(
     tournament_id: int = Path(..., ge=0, le=3),
+    season: Optional[str] = Query(None, description="period_value сезона (если не указан — последний)"),
     db: Session = Depends(get_db),
 ):
     """
@@ -345,7 +409,7 @@ async def recompute_season_analysis(
     PER90 данные каждого игрока сравниваются с остальными на той же позиции.
     """
     from app.services.percentile_engine import compute_season_analysis
-    result = compute_season_analysis(db=db, tournament_id=tournament_id)
+    result = compute_season_analysis(db=db, tournament_id=tournament_id, season=season)
     if not result.get("computed"):
         raise HTTPException(status_code=404, detail=result.get("error", "Не удалось вычислить"))
     return {"success": True, "data": result, "message": "Сезонный анализ пересчитан"}
@@ -357,21 +421,25 @@ async def get_season_top_by_position(
     sort_by: str = Query("total_score"),
     funnel: str = Query("all"),
     baseline_kind: str = Query("SEASON"),
+    season: Optional[str] = Query(None, description="period_value сезона (если не указан — последний)"),
     limit_per_position: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
 ):
     """
     Получить топ игроков по каждой позиции за весь сезон.
-    baseline_kind: SEASON (сравнение внутри сезона) или SEASON_BENCHMARK (сравнение с эталоном).
+    baseline_kind: SEASON, TIER, или SEASON_BENCHMARK.
+    season: конкретный сезон (period_value), если не указан — последний загруженный.
     """
-    safe_baseline = baseline_kind if baseline_kind in ("SEASON", "SEASON_BENCHMARK") else "SEASON"
+    safe_baseline = baseline_kind if baseline_kind in ("SEASON", "TIER", "SEASON_BENCHMARK") else "SEASON"
 
-    # Find PER90 SEASON slice
-    per90_slice_id = db.execute(text("""
-        SELECT slice_id FROM stat_slices
-        WHERE tournament_id = :tid AND slice_type = 'PER90' AND period_type = 'SEASON'
-        ORDER BY uploaded_at DESC LIMIT 1
-    """), {"tid": tournament_id}).scalar()
+    # Find PER90 SEASON slice (optionally for specific season)
+    season_filter = "AND ss.period_value = :pv" if season else ""
+    per90_slice_id = db.execute(text(f"""
+        SELECT slice_id FROM stat_slices ss
+        WHERE ss.tournament_id = :tid AND ss.slice_type = 'PER90' AND ss.period_type = 'SEASON'
+        {season_filter}
+        ORDER BY ss.uploaded_at DESC LIMIT 1
+    """), {"tid": tournament_id, **({"pv": season} if season else {})}).scalar()
 
     if not per90_slice_id:
         return {"success": True, "data": {}, "message": "Нет PER90 данных за сезон"}
@@ -386,18 +454,23 @@ async def get_season_top_by_position(
         if safe_baseline == "SEASON_BENCHMARK":
             return {"success": True, "data": {}, "total_positions": 0, "needs_recompute": True,
                     "message": "Эталонный анализ не рассчитан. Загрузите эталон и нажмите «Пересчитать»."}
+        if safe_baseline == "TIER":
+            return {"success": True, "data": {}, "total_positions": 0, "needs_recompute": True,
+                    "message": "Анализ по корзинам не рассчитан. Настройте корзины и нажмите «Пересчитать»."}
         return {"success": True, "data": {}, "total_positions": 0, "needs_recompute": True,
                 "message": "Сезонный анализ не рассчитан. Нажмите «Пересчитать»."}
 
+    ALLOWED_SORTS = ("core_score_adj", "total_score", "support_score_adj", "support_score", "core_score", "good_share_core")
+    safe_sort = sort_by if sort_by in ALLOWED_SORTS else "total_score"
+
+    funnel_col = safe_sort
     funnel_cond = ""
     if funnel == "p75":
-        funnel_cond = "AND rs.total_score >= 0.75"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.75"
     elif funnel == "p85":
-        funnel_cond = "AND rs.total_score >= 0.85"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.85"
     elif funnel == "p90":
-        funnel_cond = "AND rs.total_score >= 0.90"
-
-    safe_sort = sort_by if sort_by in ("core_score_adj", "total_score", "support_score", "core_score") else "total_score"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.90"
 
     rows = db.execute(text(f"""
         WITH ranked AS (
@@ -473,33 +546,40 @@ async def get_season_top(
     sort_by: str = Query("total_score"),
     funnel: str = Query("all"),
     baseline_kind: str = Query("SEASON"),
+    season: Optional[str] = Query(None, description="period_value сезона (если не указан — последний)"),
     position_code: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     """Общий рейтинг за сезон — все позиции в одном списке.
-    baseline_kind: SEASON или SEASON_BENCHMARK."""
-    safe_baseline = baseline_kind if baseline_kind in ("SEASON", "SEASON_BENCHMARK") else "SEASON"
+    baseline_kind: SEASON, TIER, или SEASON_BENCHMARK.
+    season: конкретный сезон (period_value), если не указан — последний."""
+    safe_baseline = baseline_kind if baseline_kind in ("SEASON", "TIER", "SEASON_BENCHMARK") else "SEASON"
 
-    per90_slice_id = db.execute(text("""
-        SELECT slice_id FROM stat_slices
-        WHERE tournament_id = :tid AND slice_type = 'PER90' AND period_type = 'SEASON'
-        ORDER BY uploaded_at DESC LIMIT 1
-    """), {"tid": tournament_id}).scalar()
+    season_filter = "AND ss.period_value = :pv" if season else ""
+    per90_slice_id = db.execute(text(f"""
+        SELECT slice_id FROM stat_slices ss
+        WHERE ss.tournament_id = :tid AND ss.slice_type = 'PER90' AND ss.period_type = 'SEASON'
+        {season_filter}
+        ORDER BY ss.uploaded_at DESC LIMIT 1
+    """), {"tid": tournament_id, **({"pv": season} if season else {})}).scalar()
 
     if not per90_slice_id:
         return {"success": True, "data": [], "message": "Нет PER90 данных за сезон"}
 
+    ALLOWED_SORTS = ("core_score_adj", "total_score", "support_score_adj", "support_score", "core_score", "good_share_core")
+    safe_sort = sort_by if sort_by in ALLOWED_SORTS else "total_score"
+
+    funnel_col = safe_sort
     funnel_cond = ""
     if funnel == "p75":
-        funnel_cond = "AND rs.total_score >= 0.75"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.75"
     elif funnel == "p85":
-        funnel_cond = "AND rs.total_score >= 0.85"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.85"
     elif funnel == "p90":
-        funnel_cond = "AND rs.total_score >= 0.90"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.90"
 
     position_cond = "AND rs.position_code = :pos" if position_code else ""
-    safe_sort = sort_by if sort_by in ("core_score_adj", "total_score", "support_score", "core_score", "good_share_core") else "total_score"
 
     rows = db.execute(text(f"""
         SELECT
@@ -574,18 +654,19 @@ async def get_round_top(
     if not round_slice_id:
         return {"success": True, "data": [], "message": "Данные тура не найдены"}
 
-    # Funnel filter on total_score
+    ALLOWED_SORTS = ("core_score_adj", "total_score", "support_score_adj", "support_score", "core_score", "good_share_core")
+    safe_sort = sort_by if sort_by in ALLOWED_SORTS else "total_score"
+
+    funnel_col = safe_sort
     funnel_cond = ""
     if funnel == "p75":
-        funnel_cond = "AND rs.total_score >= 0.75"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.75"
     elif funnel == "p85":
-        funnel_cond = "AND rs.total_score >= 0.85"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.85"
     elif funnel == "p90":
-        funnel_cond = "AND rs.total_score >= 0.90"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.90"
 
     position_cond = "AND rs.position_code = :pos" if position_code else ""
-
-    safe_sort = sort_by if sort_by in ("core_score_adj", "total_score", "support_score", "core_score", "good_share_core") else "total_score"
 
     rows = db.execute(text(f"""
         SELECT
@@ -655,15 +736,17 @@ async def get_round_top_by_position(
     if not round_slice_id:
         return {"success": True, "data": {}, "message": "Данные тура не найдены"}
 
+    ALLOWED_SORTS = ("core_score_adj", "total_score", "support_score_adj", "support_score", "core_score", "good_share_core")
+    safe_sort = sort_by if sort_by in ALLOWED_SORTS else "total_score"
+
+    funnel_col = safe_sort
     funnel_cond = ""
     if funnel == "p75":
-        funnel_cond = "AND rs.total_score >= 0.75"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.75"
     elif funnel == "p85":
-        funnel_cond = "AND rs.total_score >= 0.85"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.85"
     elif funnel == "p90":
-        funnel_cond = "AND rs.total_score >= 0.90"
-
-    safe_sort = sort_by if sort_by in ("core_score_adj", "total_score", "support_score", "core_score") else "total_score"
+        funnel_cond = f"AND rs.{funnel_col} >= 0.90"
 
     rows = db.execute(text(f"""
         WITH ranked AS (
@@ -950,31 +1033,50 @@ async def get_player_percentiles(
     }
 
     # 3. Сезонные перцентили (baseline_kind = 'SEASON')
+    # Определяем сезон игрока — из какого PER90 SEASON слайса у него есть статистика
     per90_slice_id = db.execute(text("""
-        SELECT slice_id FROM stat_slices
-        WHERE tournament_id = :tid AND slice_type = 'PER90' AND period_type = 'SEASON'
-        ORDER BY uploaded_at DESC LIMIT 1
-    """), {"tid": tournament_id}).scalar()
+        SELECT ss.slice_id FROM stat_slices ss
+        JOIN player_statistics ps ON ps.slice_id = ss.slice_id
+        WHERE ss.tournament_id = :tid AND ss.slice_type = 'PER90' AND ss.period_type = 'SEASON'
+          AND ps.player_id = :pid
+        ORDER BY ss.uploaded_at DESC LIMIT 1
+    """), {"tid": tournament_id, "pid": player_id}).scalar()
 
     if per90_slice_id:
         season_data = _get_player_baseline_data(db, per90_slice_id, "SEASON", player_id)
         if season_data:
             result["season"] = season_data
 
-        # 3b. Сезонные перцентили vs Эталон (baseline_kind = 'SEASON_BENCHMARK')
+        # 3b. TIER baseline
+        season_tier_data = _get_player_baseline_data(db, per90_slice_id, "TIER", player_id)
+        if season_tier_data:
+            result["season_tier"] = season_tier_data
+
+        # 3c. Сезонные перцентили vs Эталон (baseline_kind = 'SEASON_BENCHMARK')
         if benchmark_row:
             season_bench_data = _get_player_baseline_data(db, per90_slice_id, "SEASON_BENCHMARK", player_id)
             if season_bench_data:
                 result["season_benchmark"] = season_bench_data
 
-    # 4. Перцентили за тур (baseline_kind = 'LEAGUE')
+    # 4. Перцентили за тур
     if round_number:
         round_slice_id = _find_round_slice(db, tournament_id, round_number)
         if round_slice_id:
+            # LEAGUE
             round_data = _get_player_baseline_data(db, round_slice_id, "LEAGUE", player_id)
             if round_data:
                 round_data["round_number"] = round_number
                 result["round"] = round_data
+            # TIER
+            round_tier = _get_player_baseline_data(db, round_slice_id, "TIER", player_id)
+            if round_tier:
+                round_tier["round_number"] = round_number
+                result["round_tier"] = round_tier
+            # BENCHMARK
+            round_bench = _get_player_baseline_data(db, round_slice_id, "BENCHMARK", player_id)
+            if round_bench:
+                round_bench["round_number"] = round_number
+                result["round_benchmark"] = round_bench
 
     # 5. Доступные туры с анализом
     available_rounds = db.execute(text("""
@@ -1099,3 +1201,94 @@ def _get_season(db: Session, tournament_id: int) -> str:
         SELECT season FROM tournaments WHERE id = :tid
     """), {"tid": tournament_id}).fetchone()
     return row[0] if row and row[0] else str(datetime.now().year)
+
+
+# ======================================================================
+# New Faces (Новые лица)
+# ======================================================================
+
+MIN_MINUTES_NEW_FACE = 200
+
+@router.get("/new-faces/{tournament_id}")
+def get_new_faces(
+    tournament_id: int,
+    season: Optional[str] = Query(None),
+    round_number: Optional[int] = Query(None, alias="round"),
+    db: Session = Depends(get_db),
+):
+    """
+    Новые лица: игроки, которые сыграли в последнем туре
+    и имеют < 200 минут в сезоне.
+    """
+    if not season:
+        season = _get_season(db, tournament_id)
+
+    # Determine latest round with tracking data
+    if not round_number:
+        row = db.execute(text("""
+            SELECT MAX(round_number) FROM round_appearances
+            WHERE tournament_id = :tid AND season = :season
+        """), {"tid": tournament_id, "season": season}).scalar()
+        round_number = row if row else None
+
+    if not round_number:
+        return {
+            "success": True,
+            "data": [],
+            "round_number": None,
+            "season": season,
+            "message": "Нет данных о турах. Загрузите TOTAL данные с указанием номера тура."
+        }
+
+    rows = db.execute(text("""
+        SELECT
+            ra.player_id,
+            p.full_name,
+            p.team_name,
+            p.birth_year,
+            pos.code AS position_code,
+            pos.display_name AS position_name,
+            ra.minutes_before,
+            ra.minutes_after,
+            ra.is_debut,
+            ra.round_number
+        FROM round_appearances ra
+        JOIN players p ON ra.player_id = p.player_id
+        LEFT JOIN positions pos ON p.position_id = pos.position_id
+        WHERE ra.tournament_id = :tid
+          AND ra.season = :season
+          AND ra.round_number = :rn
+          AND ra.minutes_after < :threshold
+        ORDER BY ra.is_debut DESC, ra.minutes_after ASC, p.full_name
+    """), {
+        "tid": tournament_id,
+        "season": season,
+        "rn": round_number,
+        "threshold": MIN_MINUTES_NEW_FACE,
+    }).fetchall()
+
+    players = []
+    for r in rows:
+        minutes_in_round = (r[7] or 0) - (r[6] or 0)
+        players.append({
+            "player_id": r[0],
+            "full_name": r[1],
+            "team_name": r[2],
+            "birth_year": r[3],
+            "position_code": r[4],
+            "position_name": r[5],
+            "minutes_before": r[6],
+            "minutes_after": r[7],
+            "minutes_in_round": round(minutes_in_round, 1),
+            "total_minutes": r[7],
+            "is_debut": r[8],
+        })
+
+    return {
+        "success": True,
+        "data": players,
+        "round_number": round_number,
+        "season": season,
+        "total_count": len(players),
+        "debuts_count": sum(1 for p in players if p["is_debut"]),
+    }

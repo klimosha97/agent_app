@@ -28,7 +28,21 @@ async def get_tournaments(db: Session = Depends(get_db)):
                 t.short_code as code,
                 COALESCE(t.current_round, 0) as current_round,
                 t.updated_at as last_update,
-                COUNT(DISTINCT p.player_id) as players_count,
+                (
+                    SELECT COUNT(DISTINCT ps.player_id)
+                    FROM player_statistics ps
+                    JOIN stat_slices ss ON ps.slice_id = ss.slice_id
+                    WHERE ss.tournament_id = t.id
+                      AND ss.slice_type = 'TOTAL'
+                      AND ss.period_type = 'SEASON'
+                      AND ss.slice_id = (
+                          SELECT s2.slice_id FROM stat_slices s2
+                          WHERE s2.tournament_id = t.id
+                            AND s2.slice_type = 'TOTAL'
+                            AND s2.period_type = 'SEASON'
+                          ORDER BY s2.uploaded_at DESC LIMIT 1
+                      )
+                ) as players_count,
                 (
                     SELECT MAX(CAST(ss.period_value AS INTEGER))
                     FROM stat_slices ss
@@ -37,7 +51,6 @@ async def get_tournaments(db: Session = Depends(get_db)):
                       AND ss.period_value ~ '^\d+$'
                 ) as last_loaded_round
             FROM tournaments t
-            LEFT JOIN players p ON p.tournament_id = t.id
             GROUP BY t.id, t.name, t.full_name, t.short_code, t.current_round, t.updated_at
             ORDER BY t.id
         """))
@@ -85,9 +98,22 @@ async def get_tournament(tournament_id: int, db: Session = Depends(get_db)):
                 t.short_code as code,
                 COALESCE(t.current_round, 0) as current_round,
                 t.updated_at as last_update,
-                COUNT(DISTINCT p.player_id) as players_count
+                (
+                    SELECT COUNT(DISTINCT ps.player_id)
+                    FROM player_statistics ps
+                    JOIN stat_slices ss ON ps.slice_id = ss.slice_id
+                    WHERE ss.tournament_id = t.id
+                      AND ss.slice_type = 'TOTAL'
+                      AND ss.period_type = 'SEASON'
+                      AND ss.slice_id = (
+                          SELECT s2.slice_id FROM stat_slices s2
+                          WHERE s2.tournament_id = t.id
+                            AND s2.slice_type = 'TOTAL'
+                            AND s2.period_type = 'SEASON'
+                          ORDER BY s2.uploaded_at DESC LIMIT 1
+                      )
+                ) as players_count
             FROM tournaments t
-            LEFT JOIN players p ON p.tournament_id = t.id
             WHERE t.id = :tid
             GROUP BY t.id, t.name, t.full_name, t.short_code, t.current_round, t.updated_at
         """), {"tid": tournament_id})

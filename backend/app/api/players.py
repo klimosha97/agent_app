@@ -26,6 +26,8 @@ async def get_all_players_database(
     slice_type: str = Query("TOTAL", description="Тип статистики: TOTAL или PER90"),
     period_type: str = Query("SEASON", description="Тип периода: SEASON или ROUND"),
     round_number: Optional[int] = Query(None, ge=1, le=50, description="Номер тура (для period_type=ROUND)"),
+    current_season_only: bool = Query(True, description="Только текущий сезон (последний загруженный)"),
+    season: Optional[str] = Query(None, description="Конкретный сезон (period_value). Если указан, current_season_only игнорируется"),
     search: Optional[str] = Query(None, description="Поиск по имени игрока или команде"),
     position_group: Optional[str] = Query(None, description="Группа позиций: ATT, MID, DEF"),
     page: int = Query(1, ge=1, description="Номер страницы"),
@@ -65,7 +67,7 @@ async def get_all_players_database(
         safe_sort_field = sort_field if sort_field else 'goals'
         
         # Строковые поля сортируются по тексту, остальные по числам
-        string_fields = {'full_name', 'team_name', 'position_code', 'position_group', 'position_name', 'citizenship'}
+        string_fields = {'full_name', 'team_name', 'position_code', 'position_group', 'position_name', 'citizenship', 'season', 'tournament_id'}
         
         # Формируем ORDER BY динамически
         if safe_sort_field in string_fields:
@@ -81,10 +83,31 @@ async def get_all_players_database(
                 order_sql = f"ORDER BY {safe_sort_field} DESC NULLS LAST"
         
         # Определяем period_value для фильтра
-        # Для ROUND используем номер тура, для SEASON - не фильтруем по period_value
         period_value_filter = ""
         if period_type == 'ROUND' and round_number:
             period_value_filter = "AND ss.period_value = :period_value"
+        
+        # Фильтр по сезону: конкретный или последний загруженный
+        latest_slice_filter = ""
+        if season and period_type == 'SEASON':
+            latest_slice_filter = "AND ss.period_value = :season_pv"
+        elif current_season_only and period_type == 'SEASON':
+            latest_slice_filter = """AND ss.slice_id = (
+                SELECT s2.slice_id FROM stat_slices s2
+                WHERE s2.tournament_id = p.tournament_id
+                  AND s2.slice_type = :slice_type
+                  AND s2.period_type = 'SEASON'
+                ORDER BY s2.uploaded_at DESC LIMIT 1
+            )"""
+        elif current_season_only and period_type == 'ROUND':
+            latest_slice_filter = """AND ss.slice_id = (
+                SELECT s2.slice_id FROM stat_slices s2
+                WHERE s2.tournament_id = p.tournament_id
+                  AND s2.slice_type = :slice_type
+                  AND s2.period_type = 'ROUND'
+                  AND s2.period_value = ss.period_value
+                ORDER BY s2.uploaded_at DESC LIMIT 1
+            )"""
         
         # Базовый запрос с динамическим PIVOT всех метрик
         query_sql = f"""
@@ -100,6 +123,8 @@ async def get_all_players_database(
                     pos.code as position_code,
                     pos.group_code as position_group,
                     pos.display_name as position_name,
+                    p.tournament_id,
+                    ss.period_value as season,
                     {pivot_sql}
                 FROM players p
                 JOIN positions pos ON p.position_id = pos.position_id
@@ -108,13 +133,14 @@ async def get_all_players_database(
                 WHERE ss.slice_type = :slice_type
                   AND ss.period_type = :period_type
                   {period_value_filter}
+                  {latest_slice_filter}
                   AND (:tournament_id IS NULL OR p.tournament_id = :tournament_id)
                   AND (:position_group IS NULL OR pos.group_code = :position_group)
                   AND (:search IS NULL OR 
                        LOWER(p.full_name) LIKE LOWER(:search_pattern) OR 
                        LOWER(p.team_name) LIKE LOWER(:search_pattern))
                 GROUP BY p.player_id, p.full_name, p.team_name, p.birth_year, p.height, p.weight, p.citizenship,
-                         pos.code, pos.group_code, pos.display_name
+                         pos.code, pos.group_code, pos.display_name, p.tournament_id, ss.period_value
             )
             SELECT *,
                 COUNT(*) OVER() as total_count
@@ -138,6 +164,9 @@ async def get_all_players_database(
             'limit': limit,
             'offset': offset
         }
+        
+        if season and period_type == 'SEASON':
+            params['season_pv'] = season
         
         # Добавляем period_value только для ROUND
         if period_type == 'ROUND' and round_number:
@@ -178,9 +207,11 @@ async def get_all_players_database(
                 
                 value = row[idx]
                 
-                # Конвертируем проценты (если это процент, умножаем на 100)
+                int_fields = {'player_id', 'tournament_id', 'birth_year'}
                 if col_name in metrics_types and metrics_types[col_name] == 'PERCENTAGE' and value is not None:
                     value = float(value) * 100
+                elif col_name in int_fields and value is not None:
+                    value = int(value)
                 elif value is not None and isinstance(value, (int, float)):
                     value = float(value)
                 
@@ -255,9 +286,22 @@ async def get_tournaments_info(db: Session = Depends(get_db)):
                 t.short_code as code,
                 COALESCE(t.current_round, 0) as current_round,
                 t.updated_at as last_update,
-                COUNT(DISTINCT p.player_id) as players_count
+                (
+                    SELECT COUNT(DISTINCT ps.player_id)
+                    FROM player_statistics ps
+                    JOIN stat_slices ss ON ps.slice_id = ss.slice_id
+                    WHERE ss.tournament_id = t.id
+                      AND ss.slice_type = 'TOTAL'
+                      AND ss.period_type = 'SEASON'
+                      AND ss.slice_id = (
+                          SELECT s2.slice_id FROM stat_slices s2
+                          WHERE s2.tournament_id = t.id
+                            AND s2.slice_type = 'TOTAL'
+                            AND s2.period_type = 'SEASON'
+                          ORDER BY s2.uploaded_at DESC LIMIT 1
+                      )
+                ) as players_count
             FROM tournaments t
-            LEFT JOIN players p ON p.tournament_id = t.id
             GROUP BY t.id, t.name, t.full_name, t.short_code, t.current_round, t.updated_at
             ORDER BY t.id
         """))
@@ -285,89 +329,38 @@ async def get_tournaments_info(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/upload/tournament")
-async def upload_tournament_file(
-    file: UploadFile = File(...),
-    tournament_id: int = Form(...),
-    slice_type: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    """
-    Загрузить файл для турнира.
-    
-    При загрузке:
-    - Существующие игроки обновляются (по имени, году рождения, команде, турниру)
-    - Новые игроки добавляются
-    """
-    try:
-        # Проверка типа файла
-        if not file.filename.endswith(('.xlsx', '.xls')):
-            raise HTTPException(status_code=400, detail="Поддерживаются только файлы .xlsx и .xls")
-        
-        # Сохранение файла
-        upload_dir = Path("/uploads")
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = upload_dir / f"{timestamp}_{tournament_id}_{slice_type}_{file.filename}"
-        
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        logger.info(f"File saved: {file_path}")
-        
-        # Загрузка в БД
-        loader = DataLoader(db)
-        
-        result = loader.load_file(
-            file_path=file_path,
-            tournament_id=tournament_id,
-            slice_type=slice_type,
-            period_type='SEASON',
-            period_value='1-15'  # TODO: Получать из параметров
-        )
-        
-        # Обновляем дату обновления турнира
-        db.execute(text("""
-            UPDATE tournaments 
-            SET updated_at = CURRENT_TIMESTAMP 
-            WHERE id = :tid
-        """), {"tid": tournament_id})
-        db.commit()
-        
-        logger.info(f"✅ Loaded {result['players_loaded']} players, {result['stats_loaded']} stats")
-        
-        return {
-            "success": True,
-            "message": f"Загружено {result['players_loaded']} игроков, {result['stats_loaded']} статистик",
-            "players_loaded": result['players_loaded'],
-            "stats_loaded": result['stats_loaded']
-        }
-        
-    except Exception as e:
-        logger.error(f"Error uploading file: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# NOTE: /upload/tournament endpoint is defined in app/api/upload.py
+# Removed duplicate from here that was hardcoding period_value='1-15'
 
 
 @router.post("/database/clear")
-async def clear_database(db: Session = Depends(get_db)):
+async def clear_database(
+    confirm: bool = Query(False, description="Подтверждение очистки (confirm=true)"),
+    tournament_id: Optional[int] = Query(None, description="ID турнира (если не указан — все)"),
+    db: Session = Depends(get_db),
+):
     """
     Очистить базу данных (игроков и статистику).
     Турниры и справочники остаются.
+    Требует confirm=true.
     """
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Требуется подтверждение: confirm=true")
+
     try:
-        # Очищаем аналитические таблицы (могут быть не созданы ещё)
-        for tbl in ('round_scores', 'round_percentiles', 'benchmark_slices', 'team_tiers'):
+        tables_to_clear = ['round_scores', 'round_percentiles', 'benchmark_slices', 'team_tiers', 'watched_players', 'round_appearances']
+        for tbl in tables_to_clear:
             exists = db.execute(text(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = :t)"
             ), {"t": tbl}).scalar()
             if exists:
-                db.execute(text(f"TRUNCATE TABLE {tbl} CASCADE"))
-        # Очищаем основные таблицы
+                if tournament_id is not None and tbl in ('team_tiers', 'benchmark_slices'):
+                    db.execute(text(f"DELETE FROM {tbl} WHERE tournament_id = :tid"), {"tid": tournament_id})
+                else:
+                    db.execute(text(f"TRUNCATE TABLE {tbl} CASCADE"))
         db.execute(text("TRUNCATE TABLE player_statistics CASCADE"))
         db.execute(text("TRUNCATE TABLE stat_slices CASCADE"))
         db.execute(text("TRUNCATE TABLE players CASCADE"))
-        # Сбрасываем current_round у всех турниров (данные удалены)
         db.execute(text("UPDATE tournaments SET current_round = 0"))
         db.commit()
         
@@ -633,3 +626,111 @@ async def get_player_available_slices(
     except Exception as e:
         logger.error(f"Error getting player available slices: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================
+# Watched Players (MY / TRACKED)
+# =============================================
+
+TOURNAMENT_NAMES = {0: "МФЛ", 1: "ЮФЛ-1", 2: "ЮФЛ-2", 3: "ЮФЛ-3"}
+
+
+@router.get("/watched-players/{list_type}")
+async def get_watched_players(
+    list_type: str,
+    db: Session = Depends(get_db),
+):
+    """Получить список отслеживаемых игроков (MY или TRACKED) с базовой информацией."""
+    if list_type not in ("MY", "TRACKED"):
+        raise HTTPException(status_code=400, detail="list_type must be MY or TRACKED")
+
+    rows = db.execute(text("""
+        SELECT
+            wp.id, wp.player_id, wp.notes, wp.added_at,
+            p.full_name, p.team_name, p.tournament_id,
+            pos.code as position_code, pos.display_name as position_name,
+            pos.group_code as position_group
+        FROM watched_players wp
+        JOIN players p ON wp.player_id = p.player_id
+        JOIN positions pos ON p.position_id = pos.position_id
+        WHERE wp.list_type = :lt
+        ORDER BY wp.added_at DESC
+    """), {"lt": list_type}).fetchall()
+
+    players = []
+    for r in rows:
+        players.append({
+            "watch_id": r[0],
+            "player_id": r[1],
+            "notes": r[2],
+            "added_at": r[3].isoformat() if r[3] else None,
+            "full_name": r[4],
+            "team_name": r[5],
+            "tournament_id": r[6],
+            "tournament_name": TOURNAMENT_NAMES.get(r[6], f"T{r[6]}"),
+            "position_code": r[7],
+            "position_name": r[8],
+            "position_group": r[9],
+        })
+
+    return {"success": True, "data": players, "total": len(players)}
+
+
+@router.post("/watched-players")
+async def add_watched_player(
+    body: dict,
+    db: Session = Depends(get_db),
+):
+    """Добавить игрока в список MY или TRACKED."""
+    player_id = body.get("player_id")
+    list_type = body.get("list_type")
+    notes = body.get("notes", "")
+
+    if not player_id or list_type not in ("MY", "TRACKED"):
+        raise HTTPException(status_code=400, detail="player_id and list_type (MY/TRACKED) required")
+
+    existing = db.execute(text("""
+        SELECT id FROM watched_players WHERE player_id = :pid AND list_type = :lt
+    """), {"pid": player_id, "lt": list_type}).fetchone()
+
+    if existing:
+        return {"success": True, "already_exists": True, "message": "Игрок уже в списке"}
+
+    db.execute(text("""
+        INSERT INTO watched_players (player_id, list_type, notes)
+        VALUES (:pid, :lt, :notes)
+    """), {"pid": player_id, "lt": list_type, "notes": notes})
+    db.commit()
+
+    return {"success": True, "message": "Игрок добавлен"}
+
+
+@router.delete("/watched-players/{list_type}/{player_id}")
+async def remove_watched_player(
+    list_type: str,
+    player_id: int,
+    db: Session = Depends(get_db),
+):
+    """Удалить игрока из списка."""
+    if list_type not in ("MY", "TRACKED"):
+        raise HTTPException(status_code=400, detail="list_type must be MY or TRACKED")
+
+    db.execute(text("""
+        DELETE FROM watched_players WHERE player_id = :pid AND list_type = :lt
+    """), {"pid": player_id, "lt": list_type})
+    db.commit()
+    return {"success": True, "message": "Игрок удалён из списка"}
+
+
+@router.get("/watched-players/check/{player_id}")
+async def check_watched_status(
+    player_id: int,
+    db: Session = Depends(get_db),
+):
+    """Проверить, в каких списках находится игрок."""
+    rows = db.execute(text("""
+        SELECT list_type FROM watched_players WHERE player_id = :pid
+    """), {"pid": player_id}).fetchall()
+
+    lists = [r[0] for r in rows]
+    return {"success": True, "player_id": player_id, "in_my": "MY" in lists, "in_tracked": "TRACKED" in lists}
