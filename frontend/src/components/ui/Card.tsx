@@ -12,6 +12,7 @@ interface CardProps {
   shadow?: 'none' | 'sm' | 'md' | 'lg';
   hover?: boolean;
   onClick?: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -21,6 +22,7 @@ export const Card: React.FC<CardProps> = ({
   shadow = 'sm',
   hover = false,
   onClick,
+  onContextMenu,
 }) => {
   const baseClasses = 'bg-white rounded-lg border border-gray-200';
 
@@ -50,6 +52,7 @@ export const Card: React.FC<CardProps> = ({
         className
       )}
       onClick={onClick}
+      onContextMenu={onContextMenu}
     >
       {children}
     </div>

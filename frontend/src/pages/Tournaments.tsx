@@ -281,6 +281,17 @@ export const Tournaments: React.FC = () => {
   const [comparisonMode, setComparisonMode] = useState<'season' | 'round'>('season');
   const [tierEditorOpen, setTierEditorOpen] = useState(false);
 
+  // Tournament management state
+  const [createTournamentOpen, setCreateTournamentOpen] = useState(false);
+  const [editTournament, setEditTournament] = useState<Tournament | null>(null);
+  const [createFullName, setCreateFullName] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createLoading, setCreateLoading] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tournament: Tournament } | null>(null);
+  const [clearModalOpen, setClearModalOpen] = useState(false);
+  const [clearSelectedIds, setClearSelectedIds] = useState<number[]>([]);
+  const [clearLoading, setClearLoading] = useState(false);
+
   // Persist key navigation state to sessionStorage
   useEffect(() => {
     if (selectedTournamentId !== null) ssSet('t_tournId', String(selectedTournamentId));
@@ -291,6 +302,13 @@ export const Tournaments: React.FC = () => {
     if (analysisRound !== null) ssSet('t_analysisRound', String(analysisRound));
     else ssRemove('t_analysisRound');
   }, [analysisRound]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [contextMenu]);
 
   // Видимые колонки - загружаем из localStorage или используем дефолтные
   const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
@@ -484,20 +502,85 @@ export const Tournaments: React.FC = () => {
     queryClient.invalidateQueries(['tournament-players']);
   };
 
-  const handleClearDatabase = async () => {
-    if (!window.confirm('⚠️ ВНИМАНИЕ!\n\nЭто удалит ВСЕ данные из базы (игроков и статистику).\nТурниры и справочники останутся.\n\nПродолжить?')) {
-      return;
-    }
+  const handleOpenClearModal = () => {
+    setClearSelectedIds(tournaments.map((t: Tournament) => t.id));
+    setClearModalOpen(true);
+  };
 
+  const handleClearSelected = async () => {
+    if (clearSelectedIds.length === 0) return;
+    setClearLoading(true);
     try {
-      await apiService.clearDatabase();
-      window.alert('✅ База данных очищена успешно!');
+      await apiService.clearDatabase(clearSelectedIds);
+      setClearModalOpen(false);
       queryClient.invalidateQueries(['tournaments']);
       queryClient.invalidateQueries(['database-players']);
       queryClient.invalidateQueries(['tournament-players']);
     } catch (error: any) {
-      window.alert(`❌ Ошибка очистки: ${error.message}`);
+      window.alert(`Ошибка очистки: ${error.message}`);
+    } finally {
+      setClearLoading(false);
     }
+  };
+
+  const handleCreateTournament = async () => {
+    if (!createFullName.trim() || !createName.trim()) return;
+    setCreateLoading(true);
+    try {
+      await apiService.createTournament({ full_name: createFullName.trim(), name: createName.trim() });
+      setCreateTournamentOpen(false);
+      setEditTournament(null);
+      setCreateFullName('');
+      setCreateName('');
+      queryClient.invalidateQueries(['tournaments']);
+    } catch (error: any) {
+      window.alert(`Ошибка: ${error?.response?.data?.detail || error.message}`);
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  const handleEditTournament = async () => {
+    if (!editTournament || !createFullName.trim() || !createName.trim()) return;
+    setCreateLoading(true);
+    try {
+      await apiService.updateTournament(editTournament.id, { full_name: createFullName.trim(), name: createName.trim() });
+      setEditTournament(null);
+      setCreateFullName('');
+      setCreateName('');
+      queryClient.invalidateQueries(['tournaments']);
+    } catch (error: any) {
+      window.alert(`Ошибка: ${error?.response?.data?.detail || error.message}`);
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
+  const handleDeleteTournament = async (tournament: Tournament) => {
+    if (!window.confirm(`Удалить турнир «${tournament.name}»?\n\nБудут удалены ВСЕ данные: игроки, статистика, перцентили.`)) return;
+    try {
+      await apiService.deleteTournament(tournament.id);
+      setContextMenu(null);
+      if (selectedTournamentId === tournament.id) {
+        setSelectedTournamentId(null);
+      }
+      queryClient.invalidateQueries(['tournaments']);
+    } catch (error: any) {
+      window.alert(`Ошибка удаления: ${error?.response?.data?.detail || error.message}`);
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, tournament: Tournament) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, tournament });
+  };
+
+  const handleOpenEdit = (tournament: Tournament) => {
+    setEditTournament(tournament);
+    setCreateFullName(tournament.full_name);
+    setCreateName(tournament.name);
+    setContextMenu(null);
   };
 
   // Обработчик сортировки
@@ -1587,6 +1670,7 @@ export const Tournaments: React.FC = () => {
               hover 
               className="cursor-pointer group transition-all duration-200 hover:shadow-lg"
               onClick={() => handleTournamentClick(tournament)}
+              onContextMenu={(e: React.MouseEvent) => handleContextMenu(e, tournament)}
             >
               <CardContent>
                 <div className="flex items-center justify-between">
@@ -1677,7 +1761,7 @@ export const Tournaments: React.FC = () => {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Button variant="secondary" fullWidth disabled>
+            <Button variant="secondary" fullWidth onClick={() => { setCreateFullName(''); setCreateName(''); setCreateTournamentOpen(true); }}>
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
@@ -1701,11 +1785,11 @@ export const Tournaments: React.FC = () => {
             <Button 
               variant="secondary" 
               fullWidth 
-              onClick={handleClearDatabase}
+              onClick={handleOpenClearModal}
               className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
             >
               <TrashIcon className="w-4 h-4 mr-2" />
-              Очистить БД
+              Очистить данные
             </Button>
           </div>
         </CardContent>
@@ -1767,6 +1851,159 @@ export const Tournaments: React.FC = () => {
           tournamentId={selectedTournament.id}
           tournamentName={selectedTournament.full_name}
         />
+      )}
+
+      {/* Контекстное меню для карточки турнира */}
+      {contextMenu && (
+        <div
+          className="fixed z-[9999] bg-white rounded-lg shadow-xl border border-gray-200 py-1 min-w-[180px]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center"
+            onClick={() => handleOpenEdit(contextMenu.tournament)}
+          >
+            <svg className="w-4 h-4 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            Редактировать
+          </button>
+          <button
+            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center"
+            onClick={() => handleDeleteTournament(contextMenu.tournament)}
+          >
+            <TrashIcon className="w-4 h-4 mr-2" />
+            Удалить турнир
+          </button>
+        </div>
+      )}
+
+      {/* Модальное окно создания турнира */}
+      {createTournamentOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setCreateTournamentOpen(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Добавить турнир</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Краткое название</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Например: ЮФЛ-4"
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Полное название</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Например: Юношеская футбольная лига - первенство 4"
+                  value={createFullName}
+                  onChange={(e) => setCreateFullName(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end space-x-3 mt-6">
+              <button className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800" onClick={() => setCreateTournamentOpen(false)}>Отмена</button>
+              <button
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                onClick={handleCreateTournament}
+                disabled={createLoading || !createName.trim() || !createFullName.trim()}
+              >
+                {createLoading ? 'Создание...' : 'Создать'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно редактирования турнира */}
+      {editTournament && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setEditTournament(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Редактировать турнир</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Краткое название</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Полное название</label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={createFullName}
+                  onChange={(e) => setCreateFullName(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end space-x-3 mt-6">
+              <button className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800" onClick={() => setEditTournament(null)}>Отмена</button>
+              <button
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                onClick={handleEditTournament}
+                disabled={createLoading || !createName.trim() || !createFullName.trim()}
+              >
+                {createLoading ? 'Сохранение...' : 'Сохранить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно очистки данных */}
+      {clearModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setClearModalOpen(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">Очистить данные</h2>
+            <p className="text-sm text-gray-500 mb-4">Выберите турниры, данные которых нужно очистить. Сами турниры не удаляются.</p>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {tournaments.map((t: Tournament) => (
+                <label key={t.id} className="flex items-center space-x-3 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                    checked={clearSelectedIds.includes(t.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setClearSelectedIds(prev => [...prev, t.id]);
+                      } else {
+                        setClearSelectedIds(prev => prev.filter(id => id !== t.id));
+                      }
+                    }}
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-900">{t.name}</span>
+                    <span className="text-xs text-gray-500 ml-2">{t.full_name}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="flex items-center justify-between mt-6">
+              <span className="text-xs text-gray-400">Выбрано: {clearSelectedIds.length}</span>
+              <div className="flex space-x-3">
+                <button className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800" onClick={() => setClearModalOpen(false)}>Отмена</button>
+                <button
+                  className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                  onClick={handleClearSelected}
+                  disabled={clearLoading || clearSelectedIds.length === 0}
+                >
+                  {clearLoading ? 'Очистка...' : 'Очистить выбранные'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

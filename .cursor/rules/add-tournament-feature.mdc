@@ -1,0 +1,224 @@
+---
+description: ТЗ и карта изменений для фичи «Динамическое управление турнирами» (создание, редактирование, удаление, выборочная очистка)
+alwaysApply: true
+---
+
+# Фича: Динамическое управление турнирами
+
+## 1. Текущее состояние
+
+Сейчас турниры **захардкожены** (id=0 МФЛ, 1 ЮФЛ-1, 2 ЮФЛ-2, 3 ЮФЛ-3) в ~24 точках кода.
+Нужно сделать их динамическими: создавать, редактировать, удалять через UI, при этом сохранив обратную совместимость с существующими 4 турнирами.
+
+## 2. Требования
+
+### 2.1 Создание турнира
+- Кнопка «Добавить турнир» (заглушка уже есть: `Tournaments.tsx` строка 1679, disabled Button)
+- Модальное окно с полями:
+  - **Полное название** (текст, обязательное) — например «Юношеская футбольная лига - первенство 4»
+  - **Краткое название** (текст, обязательное) — например «ЮФЛ-4»
+- `short_code` генерируется автоматически из краткого названия (транслитерация, например «ЮФЛ-4» → `YFL4`)
+- `file_pattern` — паттерн для валидации xlsx файлов, генерируется из `short_code` (например `YFL4` → `yfl4`)
+- `id` назначается автоинкрементом (SERIAL), следующий свободный (не 0-3)
+
+### 2.2 Редактирование турнира
+- **Правый клик** по карточке турнира → контекстное меню с пунктами:
+  - «Редактировать» → модальное окно с теми же полями (полное/краткое название)
+  - «Удалить» → подтверждение
+- При редактировании меняются `name`, `full_name`, `short_code`, `file_pattern`
+
+### 2.3 Удаление турнира
+- Через контекстное меню (правая кнопка мыши)
+- Подтверждение: «Вы уверены? Будут удалены ВСЕ данные турнира (игроки, статистика, перцентили)»
+- CASCADE: удаляются players, stat_slices, player_statistics, team_tiers, benchmark_slices, round_scores, round_percentiles, round_appearances, watched_players для этого турнира
+- Сам турнир удаляется из таблицы `tournaments`
+
+### 2.4 Очистка данных (модификация существующей)
+- Кнопка «Очистить БД» (`Tournaments.tsx` строка 1701) → модальное окно:
+  - Список всех турниров с **чекбоксами** (можно выбрать несколько)
+  - Кнопка «Очистить выбранные»
+- Очищаются данные выбранных турниров: `players`, `player_statistics`, `stat_slices`, `round_percentiles`, `round_scores`, `team_tiers`, `benchmark_slices`, `round_appearances`
+- Турнир **НЕ удаляется**, только данные обнуляются
+- `current_round` сбрасывается на 0
+
+### 2.5 Валидация файлов
+- Файлы xlsx валидируются так же как сейчас: паттерн в имени файла должен соответствовать турниру
+- Паттерн берётся из колонки `file_pattern` таблицы `tournaments` (вместо хардкода)
+- Для существующих турниров: mfl, yfl1, yfl2, yfl3 — без изменений
+- Для новых: генерируется из `short_code` → lowercase
+
+### 2.6 Позиции и метрики
+- Одинаковы для ВСЕХ турниров (из `POSITION_INFO.txt`)
+- При добавлении нового турнира позиции и метрики НЕ меняются
+
+## 3. Схема БД — изменения
+
+### 3.1 Таблица `tournaments` — добавить колонку
+```sql
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS file_pattern VARCHAR(50);
+```
+
+### 3.2 Заполнить file_pattern для существующих
+```sql
+UPDATE tournaments SET file_pattern = 'mfl' WHERE id = 0;
+UPDATE tournaments SET file_pattern = 'yfl1' WHERE id = 1;
+UPDATE tournaments SET file_pattern = 'yfl2' WHERE id = 2;
+UPDATE tournaments SET file_pattern = 'yfl3' WHERE id = 3;
+```
+
+### 3.3 Сделать file_pattern NOT NULL после заполнения
+```sql
+ALTER TABLE tournaments ALTER COLUMN file_pattern SET NOT NULL;
+```
+
+### 3.4 Таблицы с FK на tournaments
+- `players` → `ON DELETE CASCADE` (уже есть в schema.sql)
+- `stat_slices` → `ON DELETE CASCADE` (уже есть в schema.sql)
+- `team_tiers` → FK **нет**, нужно добавить или делать DELETE вручную
+- `benchmark_slices` → FK **нет**, нужно добавить или делать DELETE вручную
+- `round_appearances` → FK **нет**, нужно добавить или делать DELETE вручную
+
+### 3.5 Обратная совместимость
+- Существующие 4 турнира (id=0,1,2,3) сохраняются
+- Все загруженные данные сохраняются
+- Новые турниры получают id >= 4
+
+## 4. Полная карта изменений по файлам
+
+### 4.1 Backend — миграция БД
+
+| Файл | Что делать |
+|------|-----------|
+| Новый файл миграции Alembic | ALTER TABLE tournaments ADD file_pattern; UPDATE существующих; сделать NOT NULL |
+
+### 4.2 Backend — API турниров (`backend/app/api/tournaments.py`)
+
+| Действие | Детали |
+|----------|--------|
+| Добавить `POST /tournaments` | Создание турнира (name, full_name → auto short_code, file_pattern) |
+| Добавить `PUT /tournaments/{id}` | Редактирование (name, full_name, short_code) |
+| Добавить `DELETE /tournaments/{id}` | Удаление с CASCADE |
+
+### 4.3 Backend — убрать хардкод ge=0, le=3
+
+| Файл | Строки | Что менять |
+|------|--------|-----------|
+| `backend/app/api/upload.py` | 101, 400, 526, 670, 805 | Убрать `ge=0, le=3`, заменить на валидацию «турнир существует в БД» |
+| `backend/app/api/players.py` | 25 | Убрать `ge=0, le=3` |
+| `backend/app/api/analysis.py` | 54, 121, 154, 195, 222, 312, 338, 369, 403, 420, 554, 657, 740, 840, 935 | Убрать `ge=0, le=3` — **15 эндпоинтов** |
+| `backend/app/api/schemas.py` | 146, 276 | Убрать `ge=0, le=3` из `PlayerCreate.tournament_id` и `PlayerFilters.tournament_id` |
+
+### 4.4 Backend — убрать хардкод турниров
+
+| Файл | Строки | Что менять |
+|------|--------|-----------|
+| `backend/app/api/schemas.py` | 21-26 | Удалить `TournamentEnum` |
+| `backend/app/api/schemas.py` | 363-367 | Переписать `validate_tournament_id` — проверять по БД |
+| `backend/app/api/upload.py` | 187-192, 416-429, 521-533 | Заменить `expected_patterns = {0: "mfl", ...}` → получать `file_pattern` из БД |
+| `backend/app/api/upload.py` | 284-294 | `auto_detection.patterns` → формировать динамически из БД |
+| `backend/app/api/players.py` | 458 | Заменить `TOURNAMENT_NAMES = {0:..., 3:...}` → получать из БД |
+| `backend/app/services/excel_import.py` | 26-31 | `_tournament_patterns` → загружать из БД или получать параметром |
+| `backend/app/config.py` | 58-66, 102-110 | Убрать хардкод `tournaments` dict; `get_tournament_name`/`get_tournament_code` → из БД |
+
+### 4.5 Backend — модифицировать очистку
+
+| Файл | Строки | Что менять |
+|------|--------|-----------|
+| `backend/app/api/players.py` | 336-377 | Эндпоинт `POST /database/clear` — принимать список `tournament_ids`, очищать только выбранные |
+
+### 4.6 Frontend — убрать хардкод
+
+| Файл | Строки | Что менять |
+|------|--------|-----------|
+| `frontend/src/types/index.ts` | 255-260 | Убрать `TOURNAMENTS` хардкод или оставить как fallback, данные брать из API |
+| `frontend/src/pages/Database.tsx` | 177-182 | Убрать `TOURNAMENT_NAMES` хардкод → использовать данные из API турниров |
+| `frontend/src/utils/index.ts` | 55-68 | `getTournamentName`, `getTournamentFullName`, `getTournamentCode` → использовать данные из API |
+
+### 4.7 Frontend — UI
+
+| Файл | Строки | Что делать |
+|------|--------|-----------|
+| `frontend/src/pages/Tournaments.tsx` | 1679-1685 | Активировать кнопку «Добавить турнир» → открывать модальное окно создания |
+| `frontend/src/pages/Tournaments.tsx` | — | Добавить контекстное меню (правый клик по карточке турнира) |
+| `frontend/src/pages/Tournaments.tsx` | 487-501, 1701-1709 | Модифицировать «Очистить БД» → модальное окно с чекбоксами турниров |
+| `frontend/src/services/api.ts` | — | Добавить методы: `createTournament`, `updateTournament`, `deleteTournament`, модифицировать `clearDatabase` |
+
+### 4.8 Конфигурация
+
+| Файл | Что менять |
+|------|-----------|
+| `db/init.sql` | строки 34-45: `tournament_enum` — оставить для совместимости, не ломать. Добавить `file_pattern` в INSERT |
+| `.cursor/rules/rules.mdc` | Правило 3 «Идентификаторы турниров» — обновить под динамические |
+
+## 5. Порядок реализации
+
+### Этап 1: Миграция БД + Backend CRUD
+1. Создать Alembic миграцию: `ALTER TABLE tournaments ADD COLUMN file_pattern`
+2. Заполнить `file_pattern` для существующих турниров
+3. Добавить CRUD эндпоинты в `tournaments.py`: POST, PUT, DELETE
+4. Модифицировать `POST /database/clear` — принимать `tournament_ids: List[int]`
+
+### Этап 2: Backend — убрать хардкод
+5. Убрать `ge=0, le=3` из всех эндпоинтов (upload, players, analysis, schemas)
+6. Создать хелпер `validate_tournament_exists(db, tournament_id)` для проверки по БД
+7. Заменить `expected_patterns` в upload.py → получать `file_pattern` из таблицы `tournaments`
+8. Переписать `excel_import.py` — загружать паттерны из БД
+9. Убрать/обновить `config.py` tournaments dict
+
+### Этап 3: Frontend
+10. Добавить API-методы в `api.ts`
+11. Создать модальное окно создания турнира
+12. Добавить контекстное меню (правый клик)
+13. Модифицировать «Очистить БД» → модальное окно с чекбоксами
+14. Убрать хардкод из `types/index.ts`, `Database.tsx`, `utils/index.ts`
+
+## 6. Критические ограничения
+
+- **НЕ ломать** существующие 4 турнира (id=0,1,2,3) и их данные
+- **НЕ трогать** позиции, метрики, группы сравнения, перцентильный движок
+- **НЕ менять** формат xlsx файлов — только паттерн валидации берётся динамически
+- **НЕ менять** логику `DataLoader.load_file` — только убрать ограничение на tournament_id
+- При удалении турнира — каскадно удалять все связанные данные
+- При очистке — удалять данные, но НЕ удалять сам турнир
+- `tournament_enum` в `init.sql` — оставить для совместимости (он используется в старых миграциях), не расширять
+
+## 7. Транслитерация short_code → file_pattern
+
+Правило генерации `file_pattern` из краткого названия:
+1. Транслитерация кириллицы → латиница (ЮФЛ → YFL)
+2. Убрать пробелы, оставить дефисы и цифры
+3. Lowercase
+4. Примеры: «ЮФЛ-4» → `yfl4`, «МФЛ-Б» → `mflb`, «ЛФЛ» → `lfl`
+
+Маппинг кириллицы для транслитерации:
+```
+А→A, Б→B, В→V, Г→G, Д→D, Е→E, Ж→ZH, З→Z, И→I, Й→Y,
+К→K, Л→L, М→M, Н→N, О→O, П→P, Р→R, С→S, Т→T, У→U,
+Ф→F, Х→KH, Ц→TS, Ч→CH, Ш→SH, Щ→SHCH, Э→E, Ю→YU, Я→YA
+```
+
+## 8. Структура API (новые/изменённые эндпоинты)
+
+### POST /api/tournaments
+```json
+Request: { "full_name": "Юношеская футбольная лига - 4", "name": "ЮФЛ-4" }
+Response: { "success": true, "data": { "id": 4, "name": "ЮФЛ-4", "full_name": "...", "short_code": "YFL4", "file_pattern": "yfl4" } }
+```
+
+### PUT /api/tournaments/{id}
+```json
+Request: { "full_name": "Новое название", "name": "НН" }
+Response: { "success": true, "data": { ... } }
+```
+
+### DELETE /api/tournaments/{id}
+```json
+Response: { "success": true, "message": "Турнир и все данные удалены" }
+```
+
+### POST /api/database/clear (модифицированный)
+```json
+Request: ?confirm=true&tournament_ids=0,2
+Response: { "success": true, "message": "Данные турниров МФЛ, ЮФЛ-2 очищены" }
+```
+Если `tournament_ids` не указан — очищает все (обратная совместимость).

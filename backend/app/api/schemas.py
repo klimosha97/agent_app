@@ -18,14 +18,6 @@ class TrackingStatus(str, Enum):
     MY_PLAYER = "my player"
 
 
-class TournamentEnum(int, Enum):
-    """Enum для турниров"""
-    MFL = 0
-    YFL1 = 1
-    YFL2 = 2
-    YFL3 = 3
-
-
 # === Базовые схемы ===
 
 class BaseResponse(BaseModel):
@@ -143,7 +135,7 @@ class PlayerStats(BaseModel):
 
 class PlayerCreate(PlayerBase, PlayerStats):
     """Схема для создания нового игрока"""
-    tournament_id: int = Field(..., ge=0, le=3, description="ID турнира")
+    tournament_id: int = Field(..., ge=0, description="ID турнира")
     tracking_status: TrackingStatus = TrackingStatus.NON_INTERESTING
 
 
@@ -273,7 +265,7 @@ class PositionAverageResponse(BaseModel):
 
 class PlayerFilters(BaseModel):
     """Фильтры для поиска игроков"""
-    tournament_id: Optional[int] = Field(None, ge=0, le=3)
+    tournament_id: Optional[int] = Field(None, ge=0)
     team_name: Optional[str] = None
     position: Optional[str] = None
     tracking_status: Optional[TrackingStatus] = None
@@ -361,9 +353,9 @@ class HealthCheckResponse(BaseModel):
 # === Дополнительные валидаторы ===
 
 def validate_tournament_id(v):
-    """Валидатор для ID турнира"""
-    if v not in [0, 1, 2, 3]:
-        raise ValueError('Tournament ID must be 0 (МФЛ), 1 (ЮФЛ-1), 2 (ЮФЛ-2), or 3 (ЮФЛ-3)')
+    """Валидатор для ID турнира — проверяет что значение >= 0."""
+    if not isinstance(v, int) or v < 0:
+        raise ValueError('Tournament ID must be a non-negative integer')
     return v
 
 

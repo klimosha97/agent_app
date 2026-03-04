@@ -174,15 +174,16 @@ const DEFAULT_VISIBLE_COLUMNS = [
   'duels_success_pct', 'yellow_cards', 'red_cards'
 ];
 
-const TOURNAMENT_NAMES: Record<number, string> = {
-  0: 'МФЛ',
-  1: 'ЮФЛ-1',
-  2: 'ЮФЛ-2',
-  3: 'ЮФЛ-3',
-};
-
 export const Database: React.FC = () => {
   const { setSelectedPlayerId } = usePlayerNavigation();
+
+  const { data: tournamentsData } = useQuery('tournaments', () => apiService.getTournaments());
+  const TOURNAMENT_NAMES: Record<number, string> = {};
+  if (tournamentsData?.data) {
+    for (const t of tournamentsData.data) {
+      TOURNAMENT_NAMES[t.id] = t.name;
+    }
+  }
   
   const [sliceType, setSliceType] = useState<SliceType>('TOTAL');
   const [search, setSearch] = useState('');

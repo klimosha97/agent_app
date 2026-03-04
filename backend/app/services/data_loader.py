@@ -432,7 +432,7 @@ class DataLoader:
                 :full_name, :birth_year, :team_name, :position_id, :tournament_id,
                 :height, :weight, :citizenship
             )
-            ON CONFLICT (full_name, birth_year, team_name, tournament_id)
+            ON CONFLICT (full_name, COALESCE(birth_year, 0), team_name, tournament_id)
             DO UPDATE SET
                 position_id = EXCLUDED.position_id,
                 height = COALESCE(EXCLUDED.height, players.height),

@@ -22,7 +22,7 @@ router = APIRouter()
 
 @router.get("/players/database")
 async def get_all_players_database(
-    tournament_id: Optional[int] = Query(None, ge=0, le=3, description="ID турнира"),
+    tournament_id: Optional[int] = Query(None, description="ID турнира"),
     slice_type: str = Query("TOTAL", description="Тип статистики: TOTAL или PER90"),
     period_type: str = Query("SEASON", description="Тип периода: SEASON или ROUND"),
     round_number: Optional[int] = Query(None, ge=1, le=50, description="Номер тура (для period_type=ROUND)"),
@@ -274,103 +274,98 @@ async def get_tournament_rounds(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/tournaments/info")
-async def get_tournaments_info(db: Session = Depends(get_db)):
-    """Информация о турнирах."""
-    try:
-        result = db.execute(text("""
-            SELECT 
-                t.id,
-                t.name,
-                t.full_name,
-                t.short_code as code,
-                COALESCE(t.current_round, 0) as current_round,
-                t.updated_at as last_update,
-                (
-                    SELECT COUNT(DISTINCT ps.player_id)
-                    FROM player_statistics ps
-                    JOIN stat_slices ss ON ps.slice_id = ss.slice_id
-                    WHERE ss.tournament_id = t.id
-                      AND ss.slice_type = 'TOTAL'
-                      AND ss.period_type = 'SEASON'
-                      AND ss.slice_id = (
-                          SELECT s2.slice_id FROM stat_slices s2
-                          WHERE s2.tournament_id = t.id
-                            AND s2.slice_type = 'TOTAL'
-                            AND s2.period_type = 'SEASON'
-                          ORDER BY s2.uploaded_at DESC LIMIT 1
-                      )
-                ) as players_count
-            FROM tournaments t
-            GROUP BY t.id, t.name, t.full_name, t.short_code, t.current_round, t.updated_at
-            ORDER BY t.id
-        """))
-        
-        tournaments = []
-        for row in result:
-            tournaments.append({
-                "id": row[0],
-                "name": row[1],
-                "full_name": row[2],
-                "code": row[3],
-                "current_round": row[4],
-                "last_update": row[5].isoformat() if row[5] else None,
-                "players_count": row[6] or 0
-            })
-        
-        return {
-            "success": True,
-            "data": tournaments,
-            "total": len(tournaments)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting tournaments: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# NOTE: /upload/tournament endpoint is defined in app/api/upload.py
-# Removed duplicate from here that was hardcoding period_value='1-15'
-
-
 @router.post("/database/clear")
 async def clear_database(
     confirm: bool = Query(False, description="Подтверждение очистки (confirm=true)"),
-    tournament_id: Optional[int] = Query(None, description="ID турнира (если не указан — все)"),
+    tournament_ids: Optional[str] = Query(None, description="ID турниров через запятую (если не указан — все)"),
     db: Session = Depends(get_db),
 ):
     """
-    Очистить базу данных (игроков и статистику).
-    Турниры и справочники остаются.
+    Очистить данные (игроков и статистику) для выбранных турниров.
+    Сами турниры и справочники остаются.
+    tournament_ids — через запятую, например '0,2'. Если не указан — очищает все.
     Требует confirm=true.
     """
     if not confirm:
         raise HTTPException(status_code=400, detail="Требуется подтверждение: confirm=true")
 
+    tid_list: Optional[list] = None
+    if tournament_ids:
+        try:
+            tid_list = [int(x.strip()) for x in tournament_ids.split(',') if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="tournament_ids должен содержать числа через запятую")
+
     try:
-        tables_to_clear = ['round_scores', 'round_percentiles', 'benchmark_slices', 'team_tiers', 'watched_players', 'round_appearances']
-        for tbl in tables_to_clear:
+        if tid_list is not None:
+            slice_ids = [r[0] for r in db.execute(
+                text("SELECT slice_id FROM stat_slices WHERE tournament_id = ANY(:tids)"), {"tids": tid_list}
+            ).fetchall()]
+        else:
+            slice_ids = None
+
+        for tbl in ['round_scores', 'round_percentiles']:
             exists = db.execute(text(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = :t)"
             ), {"t": tbl}).scalar()
             if exists:
-                if tournament_id is not None and tbl in ('team_tiers', 'benchmark_slices'):
-                    db.execute(text(f"DELETE FROM {tbl} WHERE tournament_id = :tid"), {"tid": tournament_id})
+                if slice_ids is not None and len(slice_ids) > 0:
+                    db.execute(text(f"DELETE FROM {tbl} WHERE round_slice_id = ANY(:sids)"), {"sids": slice_ids})
+                elif slice_ids is None:
+                    db.execute(text(f"TRUNCATE TABLE {tbl} CASCADE"))
+
+        for tbl in ['benchmark_slices', 'team_tiers', 'round_appearances']:
+            exists = db.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = :t)"
+            ), {"t": tbl}).scalar()
+            if exists:
+                if tid_list is not None:
+                    db.execute(text(f"DELETE FROM {tbl} WHERE tournament_id = ANY(:tids)"), {"tids": tid_list})
                 else:
                     db.execute(text(f"TRUNCATE TABLE {tbl} CASCADE"))
-        db.execute(text("TRUNCATE TABLE player_statistics CASCADE"))
-        db.execute(text("TRUNCATE TABLE stat_slices CASCADE"))
-        db.execute(text("TRUNCATE TABLE players CASCADE"))
-        db.execute(text("UPDATE tournaments SET current_round = 0"))
+
+        watched_exists = db.execute(text(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'watched_players')"
+        )).scalar()
+        if watched_exists:
+            if tid_list is not None:
+                db.execute(text("""
+                    DELETE FROM watched_players WHERE player_id IN (
+                        SELECT player_id FROM players WHERE tournament_id = ANY(:tids)
+                    )
+                """), {"tids": tid_list})
+            else:
+                db.execute(text("TRUNCATE TABLE watched_players CASCADE"))
+
+        if tid_list is not None:
+            db.execute(text("""
+                DELETE FROM player_statistics WHERE player_id IN (
+                    SELECT player_id FROM players WHERE tournament_id = ANY(:tids)
+                )
+            """), {"tids": tid_list})
+            db.execute(text("DELETE FROM stat_slices WHERE tournament_id = ANY(:tids)"), {"tids": tid_list})
+            db.execute(text("DELETE FROM players WHERE tournament_id = ANY(:tids)"), {"tids": tid_list})
+            db.execute(text("UPDATE tournaments SET current_round = 0 WHERE id = ANY(:tids)"), {"tids": tid_list})
+        else:
+            db.execute(text("TRUNCATE TABLE player_statistics CASCADE"))
+            db.execute(text("TRUNCATE TABLE stat_slices CASCADE"))
+            db.execute(text("TRUNCATE TABLE players CASCADE"))
+            db.execute(text("UPDATE tournaments SET current_round = 0"))
+
         db.commit()
-        
-        logger.info("✅ Database cleared successfully")
-        
+
+        names_row = db.execute(text("SELECT name FROM tournaments WHERE id = ANY(:tids)"), {"tids": tid_list or []}).fetchall() if tid_list else []
+        cleared_names = ', '.join(r[0] for r in names_row) if names_row else 'все'
+
+        logger.info(f"Database cleared for tournaments: {cleared_names}")
+
         return {
             "success": True,
-            "message": "База данных очищена успешно"
+            "message": f"Данные очищены: {cleared_names}"
         }
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error clearing database: {e}")
         db.rollback()
@@ -632,9 +627,6 @@ async def get_player_available_slices(
 # Watched Players (MY / TRACKED)
 # =============================================
 
-TOURNAMENT_NAMES = {0: "МФЛ", 1: "ЮФЛ-1", 2: "ЮФЛ-2", 3: "ЮФЛ-3"}
-
-
 @router.get("/watched-players/{list_type}")
 async def get_watched_players(
     list_type: str,
@@ -643,6 +635,8 @@ async def get_watched_players(
     """Получить список отслеживаемых игроков (MY или TRACKED) с базовой информацией."""
     if list_type not in ("MY", "TRACKED"):
         raise HTTPException(status_code=400, detail="list_type must be MY or TRACKED")
+
+    t_names = {r[0]: r[1] for r in db.execute(text("SELECT id, name FROM tournaments")).fetchall()}
 
     rows = db.execute(text("""
         SELECT
@@ -667,7 +661,7 @@ async def get_watched_players(
             "full_name": r[4],
             "team_name": r[5],
             "tournament_id": r[6],
-            "tournament_name": TOURNAMENT_NAMES.get(r[6], f"T{r[6]}"),
+            "tournament_name": t_names.get(r[6], f"T{r[6]}"),
             "position_code": r[7],
             "position_name": r[8],
             "position_group": r[9],

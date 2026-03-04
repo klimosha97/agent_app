@@ -52,9 +52,14 @@ INSERT INTO positions (code, group_code, display_name) VALUES
 ON CONFLICT (code) DO NOTHING;
 
 
--- 2. ТУРНИРЫ (уже существует, но добавляем season)
+-- 2. ТУРНИРЫ (уже существует, но добавляем season и file_pattern)
 -- ============================================
 ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS season VARCHAR(10) DEFAULT '2025';
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS file_pattern VARCHAR(50);
+UPDATE tournaments SET file_pattern = 'mfl' WHERE id = 0 AND file_pattern IS NULL;
+UPDATE tournaments SET file_pattern = 'yfl1' WHERE id = 1 AND file_pattern IS NULL;
+UPDATE tournaments SET file_pattern = 'yfl2' WHERE id = 2 AND file_pattern IS NULL;
+UPDATE tournaments SET file_pattern = 'yfl3' WHERE id = 3 AND file_pattern IS NULL;
 
 COMMENT ON TABLE tournaments IS 'Турниры и их текущее состояние';
 COMMENT ON COLUMN tournaments.season IS 'Сезон = год: "2025", "2026" и т.д.';
@@ -81,18 +86,18 @@ CREATE TABLE IF NOT EXISTS players (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
-    -- УНИКАЛЬНОСТЬ: один игрок в турнире/команде
-    CONSTRAINT unique_player_in_tournament 
-        UNIQUE (full_name, birth_year, team_name, tournament_id)
+    -- Служебные timestamps уже выше
+    -- УНИКАЛЬНОСТЬ вынесена в CREATE UNIQUE INDEX ниже (COALESCE не допускается в CONSTRAINT)
 );
 
 CREATE INDEX idx_players_tournament ON players(tournament_id);
 CREATE INDEX idx_players_team ON players(team_name);
 CREATE INDEX idx_players_position ON players(position_id);
 CREATE INDEX idx_players_name ON players(full_name);
+CREATE UNIQUE INDEX unique_player_in_tournament
+    ON players (full_name, COALESCE(birth_year, 0), team_name, tournament_id);
 
 COMMENT ON TABLE players IS 'Игроки в контексте турнира и команды (без склейки между сезонами)';
-COMMENT ON CONSTRAINT unique_player_in_tournament ON players IS 'Запрещает дубли игрока в одной команде одного турнира';
 
 
 -- 4. СЛАЙСЫ СТАТИСТИКИ

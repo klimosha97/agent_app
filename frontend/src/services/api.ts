@@ -6,17 +6,7 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import {
   PlayerListResponse,
-  PlayerDetailResponse,
-  PlayerSearchResponse,
-  Tournament,
   TournamentListResponse,
-  TournamentStats,
-  TopPerformersResponse,
-  FileUploadResponse,
-  TrackingStatus,
-  PlayerFilters,
-  SortOptions,
-  PaginationParams,
   ApiError,
 } from '../types';
 
@@ -90,97 +80,6 @@ class ApiService {
   }
 
   // === Методы для работы с игроками ===
-
-  async getPlayers(
-    filters?: PlayerFilters,
-    sort?: SortOptions,
-    pagination?: PaginationParams
-  ): Promise<PlayerListResponse> {
-    const params = new URLSearchParams();
-
-    // Добавляем фильтры
-    if (filters?.tournament_id !== undefined) {
-      params.append('tournament_id', filters.tournament_id.toString());
-    }
-    if (filters?.team_name) {
-      params.append('team_name', filters.team_name);
-    }
-    if (filters?.position) {
-      params.append('position', filters.position);
-    }
-    if (filters?.tracking_status) {
-      params.append('tracking_status', filters.tracking_status);
-    }
-    if (filters?.min_goals !== undefined) {
-      params.append('min_goals', filters.min_goals.toString());
-    }
-    if (filters?.min_assists !== undefined) {
-      params.append('min_assists', filters.min_assists.toString());
-    }
-    if (filters?.min_minutes !== undefined) {
-      params.append('min_minutes', filters.min_minutes.toString());
-    }
-    if (filters?.search_query) {
-      params.append('search_query', filters.search_query);
-    }
-
-    // Добавляем сортировку
-    if (sort?.field) {
-      params.append('sort_field', sort.field);
-      params.append('sort_order', sort.order);
-    }
-
-    // Добавляем пагинацию
-    if (pagination?.page) {
-      params.append('page', pagination.page.toString());
-    }
-    if (pagination?.per_page) {
-      params.append('per_page', pagination.per_page.toString());
-    }
-
-    const response = await this.api.get<PlayerListResponse>(`/players?${params}`);
-    return response.data;
-  }
-
-  async getPlayer(playerId: string): Promise<PlayerDetailResponse> {
-    const response = await this.api.get<PlayerDetailResponse>(`/players/${playerId}`);
-    return response.data;
-  }
-
-  async searchPlayers(query: string, tournamentId?: number): Promise<PlayerSearchResponse> {
-    const params = new URLSearchParams();
-    params.append('query', query);
-    if (tournamentId !== undefined) {
-      params.append('tournament_id', tournamentId.toString());
-    }
-
-    const response = await this.api.get<PlayerSearchResponse>(`/players/search?${params}`);
-    return response.data;
-  }
-
-  async updatePlayerStatus(playerId: string, status: TrackingStatus, notes?: string): Promise<any> {
-    const response = await this.api.put(`/players/${playerId}/status`, {
-      tracking_status: status,
-      notes,
-    });
-    return response.data;
-  }
-
-  async getTrackedPlayers(tournamentId?: number, pagination?: PaginationParams): Promise<PlayerListResponse> {
-    const params = new URLSearchParams();
-    if (tournamentId !== undefined) {
-      params.append('tournament_id', tournamentId.toString());
-    }
-    if (pagination?.page) {
-      params.append('page', pagination.page.toString());
-    }
-    if (pagination?.per_page) {
-      params.append('per_page', pagination.per_page.toString());
-    }
-
-    const response = await this.api.get<PlayerListResponse>(`/players/tracked?${params}`);
-    return response.data;
-  }
 
   async getAllPlayersFromDatabase(
     page: number = 1,
@@ -285,8 +184,27 @@ class ApiService {
     return response.data;
   }
 
-  async clearDatabase(): Promise<any> {
-    const response = await this.api.post('/database/clear?confirm=true');
+  async clearDatabase(tournamentIds?: number[]): Promise<any> {
+    let url = '/database/clear?confirm=true';
+    if (tournamentIds && tournamentIds.length > 0) {
+      url += `&tournament_ids=${tournamentIds.join(',')}`;
+    }
+    const response = await this.api.post(url);
+    return response.data;
+  }
+
+  async createTournament(data: { full_name: string; name: string }): Promise<any> {
+    const response = await this.api.post('/tournaments', data);
+    return response.data;
+  }
+
+  async updateTournament(tournamentId: number, data: { full_name: string; name: string }): Promise<any> {
+    const response = await this.api.put(`/tournaments/${tournamentId}`, data);
+    return response.data;
+  }
+
+  async deleteTournament(tournamentId: number): Promise<any> {
+    const response = await this.api.delete(`/tournaments/${tournamentId}?confirm=true`);
     return response.data;
   }
 
@@ -304,80 +222,10 @@ class ApiService {
     return response.data;
   }
 
-  async getTournamentPlayers(
-    tournamentId: number,
-    sort?: SortOptions,
-    pagination?: PaginationParams
-  ): Promise<PlayerListResponse> {
-    const params = new URLSearchParams();
-    if (sort?.field) {
-      params.append('sort_field', sort.field);
-      params.append('sort_order', sort.order);
-    }
-    if (pagination?.page) {
-      params.append('page', pagination.page.toString());
-    }
-    if (pagination?.per_page) {
-      params.append('per_page', pagination.per_page.toString());
-    }
-
-    const response = await this.api.get<PlayerListResponse>(
-      `/tournaments/${tournamentId}/players?${params}`
-    );
-    return response.data;
-  }
-
-  async getLastRoundPlayers(
-    tournamentId?: number,
-    trackingStatus?: TrackingStatus
-  ): Promise<PlayerListResponse> {
-    const params = new URLSearchParams();
-    if (tournamentId !== undefined) {
-      params.append('tournament_id', tournamentId.toString());
-    }
-    if (trackingStatus) {
-      params.append('tracking_status', trackingStatus);
-    }
-
-    const response = await this.api.get<PlayerListResponse>(`/last-round/players?${params}`);
-    return response.data;
-  }
-
   // === Методы для работы с турнирами ===
 
   async getTournaments(): Promise<TournamentListResponse> {
     const response = await this.api.get<TournamentListResponse>('/tournaments');
-    return response.data;
-  }
-
-  async getTournament(tournamentId: number): Promise<Tournament> {
-    const response = await this.api.get<Tournament>(`/tournaments/${tournamentId}`);
-    return response.data;
-  }
-
-  async getTournamentStats(tournamentId: number): Promise<TournamentStats> {
-    const response = await this.api.get<TournamentStats>(`/tournaments/${tournamentId}/stats`);
-    return response.data;
-  }
-
-  async getTournamentTeams(tournamentId: number): Promise<any> {
-    const response = await this.api.get(`/tournaments/${tournamentId}/teams`);
-    return response.data;
-  }
-
-  async getTopPerformers(
-    period: 'all_time' | 'last_round' = 'all_time',
-    limit: number = 10,
-    tournamentId?: number
-  ): Promise<TopPerformersResponse> {
-    const params = new URLSearchParams();
-    params.append('period', period);
-    params.append('limit', limit.toString());
-    if (tournamentId !== undefined) {
-      params.append('tournament_id', tournamentId.toString());
-    }
-
-    const response = await this.api.get<TopPerformersResponse>(`/top-performers?${params}`);
     return response.data;
   }
 
@@ -708,11 +556,6 @@ class ApiService {
 
   async checkHealth(): Promise<any> {
     const response = await this.api.get('/health', { baseURL: this.baseURL.replace('/api', '') });
-    return response.data;
-  }
-
-  async getAppInfo(): Promise<any> {
-    const response = await this.api.get('/info', { baseURL: this.baseURL.replace('/api', '') });
     return response.data;
   }
 

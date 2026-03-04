@@ -51,7 +51,7 @@ async def force_sync_position_metrics(db: Session = Depends(get_db)):
 
 @router.get("/tiers/{tournament_id}", summary="Получить корзины команд")
 async def get_team_tiers(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     season: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -118,7 +118,7 @@ def _sync_team_tiers(db: Session, tournament_id: int, season: str) -> dict:
 
 @router.post("/tiers/{tournament_id}/populate", summary="Синхронизировать список команд из БД")
 async def populate_team_tiers(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     db: Session = Depends(get_db),
 ):
     """
@@ -151,7 +151,7 @@ async def populate_team_tiers(
 
 @router.put("/tiers/{tournament_id}", summary="Обновить корзины команд")
 async def update_team_tiers(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     body: dict = None,
     db: Session = Depends(get_db),
 ):
@@ -192,7 +192,7 @@ async def update_team_tiers(
 
 @router.get("/benchmarks/{tournament_id}", summary="Получить эталонный сезон")
 async def get_benchmark(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     db: Session = Depends(get_db),
 ):
     """Получить информацию об эталонном сезоне для турнира."""
@@ -219,7 +219,7 @@ async def get_benchmark(
 
 @router.post("/benchmarks/{tournament_id}", summary="Загрузить эталонный сезон")
 async def upload_benchmark(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     file: UploadFile = File(..., description="Excel файл с PER90 статистикой эталонного сезона"),
     label: str = Form("", description="Название эталона (например 'МФЛ 2024')"),
     db: Session = Depends(get_db),
@@ -309,7 +309,7 @@ async def upload_benchmark(
 
 @router.delete("/benchmarks/{tournament_id}", summary="Удалить эталонный сезон")
 async def delete_benchmark(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     db: Session = Depends(get_db),
 ):
     """Удалить эталонный сезон для турнира."""
@@ -335,7 +335,7 @@ async def delete_benchmark(
 
 @router.post("/rounds/{tournament_id}/{round_number}/recompute", summary="Пересчитать анализ тура")
 async def recompute_round_analysis(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     round_number: int = Path(..., ge=1),
     db: Session = Depends(get_db),
 ):
@@ -366,7 +366,7 @@ async def recompute_round_analysis(
 
 @router.get("/seasons/{tournament_id}", summary="Список доступных сезонов")
 async def get_available_seasons(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     db: Session = Depends(get_db),
 ):
     """Получить список всех загруженных сезонов для турнира."""
@@ -400,7 +400,7 @@ async def get_available_seasons(
 
 @router.post("/season/{tournament_id}/recompute", summary="Пересчитать сезонный анализ")
 async def recompute_season_analysis(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     season: Optional[str] = Query(None, description="period_value сезона (если не указан — последний)"),
     db: Session = Depends(get_db),
 ):
@@ -417,7 +417,7 @@ async def recompute_season_analysis(
 
 @router.get("/season/{tournament_id}/top-by-position", summary="Топ по позициям за сезон")
 async def get_season_top_by_position(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     sort_by: str = Query("total_score"),
     funnel: str = Query("all"),
     baseline_kind: str = Query("SEASON"),
@@ -551,7 +551,7 @@ async def get_season_top_by_position(
 
 @router.get("/season/{tournament_id}/top", summary="Общий топ за сезон")
 async def get_season_top(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     sort_by: str = Query("total_score"),
     funnel: str = Query("all"),
     baseline_kind: str = Query("SEASON"),
@@ -654,7 +654,7 @@ async def get_season_top(
 
 @router.get("/rounds/{tournament_id}/{round_number}/top", summary="Топ выступления за тур")
 async def get_round_top(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     round_number: int = Path(..., ge=1),
     baseline_kind: str = Query("LEAGUE"),
     sort_by: str = Query("total_score", description="core_score_adj / total_score / support_score"),
@@ -737,7 +737,7 @@ async def get_round_top(
 
 @router.get("/rounds/{tournament_id}/{round_number}/top-by-position", summary="Топ по позициям за тур")
 async def get_round_top_by_position(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     round_number: int = Path(..., ge=1),
     baseline_kind: str = Query("LEAGUE"),
     sort_by: str = Query("total_score"),
@@ -822,7 +822,9 @@ async def get_round_top_by_position(
             "support_score": r[7],
             "total_score": r[8],
             "core_score_adj": r[9],
+            "support_score_adj": r[10],
             "core_coverage": r[11],
+            "support_coverage": r[12],
             "good_share_core": r[13],
             "risk_flags": r[14] or {},
             "insufficient_data": r[15],
@@ -837,7 +839,7 @@ async def get_round_top_by_position(
     summary="Сравнение игрока по трём baselines",
 )
 async def get_player_comparison(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     round_number: int = Path(..., ge=1),
     player_id: int = Path(...),
     db: Session = Depends(get_db),
@@ -932,7 +934,7 @@ async def get_player_comparison(
 
 @router.get("/rounds/{tournament_id}/history/{player_id}", summary="История скоров игрока по турам")
 async def get_player_history(
-    tournament_id: int = Path(..., ge=0, le=3),
+    tournament_id: int = Path(...),
     player_id: int = Path(...),
     baseline_kind: str = Query("LEAGUE"),
     db: Session = Depends(get_db),
@@ -1051,7 +1053,6 @@ async def get_player_percentiles(
     }
 
     # 3. Сезонные перцентили (baseline_kind = 'SEASON')
-    # Определяем сезон игрока — из какого PER90 SEASON слайса у него есть статистика
     per90_slice_id = db.execute(text("""
         SELECT ss.slice_id FROM stat_slices ss
         JOIN player_statistics ps ON ps.slice_id = ss.slice_id
@@ -1060,19 +1061,36 @@ async def get_player_percentiles(
         ORDER BY ss.uploaded_at DESC LIMIT 1
     """), {"tid": tournament_id, "pid": player_id}).scalar()
 
+    score_pid = player_id
     if per90_slice_id:
         season_data = _get_player_baseline_data(db, per90_slice_id, "SEASON", player_id)
         if season_data:
             result["season"] = season_data
 
-        # 3b. TIER baseline
-        season_tier_data = _get_player_baseline_data(db, per90_slice_id, "TIER", player_id)
+    if not per90_slice_id or not result.get("season"):
+        alt_pid = _find_alt_player_id(db, player_id, tournament_id, "PER90", "SEASON")
+        if alt_pid and alt_pid != player_id:
+            score_pid = alt_pid
+            if not per90_slice_id:
+                per90_slice_id = db.execute(text("""
+                    SELECT ss.slice_id FROM stat_slices ss
+                    JOIN player_statistics ps ON ps.slice_id = ss.slice_id
+                    WHERE ss.tournament_id = :tid AND ss.slice_type = 'PER90' AND ss.period_type = 'SEASON'
+                      AND ps.player_id = :pid
+                    ORDER BY ss.uploaded_at DESC LIMIT 1
+                """), {"tid": tournament_id, "pid": alt_pid}).scalar()
+            if per90_slice_id:
+                season_data = _get_player_baseline_data(db, per90_slice_id, "SEASON", alt_pid)
+                if season_data:
+                    result["season"] = season_data
+
+    if per90_slice_id:
+        season_tier_data = _get_player_baseline_data(db, per90_slice_id, "TIER", score_pid)
         if season_tier_data:
             result["season_tier"] = season_tier_data
 
-        # 3c. Сезонные перцентили vs Эталон (baseline_kind = 'SEASON_BENCHMARK')
         if benchmark_row:
-            season_bench_data = _get_player_baseline_data(db, per90_slice_id, "SEASON_BENCHMARK", player_id)
+            season_bench_data = _get_player_baseline_data(db, per90_slice_id, "SEASON_BENCHMARK", score_pid)
             if season_bench_data:
                 result["season_benchmark"] = season_bench_data
 
@@ -1080,33 +1098,41 @@ async def get_player_percentiles(
     if round_number:
         round_slice_id = _find_round_slice(db, tournament_id, round_number)
         if round_slice_id:
-            # LEAGUE
+            round_pid = player_id
             round_data = _get_player_baseline_data(db, round_slice_id, "LEAGUE", player_id)
+            if not round_data:
+                alt_round_pid = _find_alt_player_id(db, player_id, tournament_id, "TOTAL", "ROUND")
+                if alt_round_pid and alt_round_pid != player_id:
+                    round_pid = alt_round_pid
+                    round_data = _get_player_baseline_data(db, round_slice_id, "LEAGUE", alt_round_pid)
             if round_data:
                 round_data["round_number"] = round_number
                 result["round"] = round_data
-            # TIER
-            round_tier = _get_player_baseline_data(db, round_slice_id, "TIER", player_id)
+            round_tier = _get_player_baseline_data(db, round_slice_id, "TIER", round_pid)
             if round_tier:
                 round_tier["round_number"] = round_number
                 result["round_tier"] = round_tier
-            # BENCHMARK
-            round_bench = _get_player_baseline_data(db, round_slice_id, "BENCHMARK", player_id)
+            round_bench = _get_player_baseline_data(db, round_slice_id, "BENCHMARK", round_pid)
             if round_bench:
                 round_bench["round_number"] = round_number
                 result["round_benchmark"] = round_bench
 
     # 5. Доступные туры с анализом
+    all_score_pids = {player_id, score_pid}
+    alt_round_pid2 = _find_alt_player_id(db, player_id, tournament_id, "TOTAL", "ROUND")
+    if alt_round_pid2:
+        all_score_pids.add(alt_round_pid2)
+
     available_rounds = db.execute(text("""
         SELECT DISTINCT CAST(ss.period_value AS INTEGER) as rn
         FROM round_scores rs
         JOIN stat_slices ss ON rs.round_slice_id = ss.slice_id
         WHERE ss.tournament_id = :tid
           AND ss.period_type = 'ROUND'
-          AND rs.player_id = :pid
+          AND rs.player_id = ANY(:pids)
           AND rs.baseline_kind = 'LEAGUE'
         ORDER BY rn DESC
-    """), {"tid": tournament_id, "pid": player_id}).fetchall()
+    """), {"tid": tournament_id, "pids": list(all_score_pids)}).fetchall()
     result["available_rounds"] = [r[0] for r in available_rounds]
 
     return result
@@ -1170,6 +1196,62 @@ def _get_player_baseline_data(
         "position_code": score_row[10],
         "metrics": metrics,
     }
+
+
+def _find_alt_player_id(
+    db, player_id: int, tournament_id: int, slice_type: str, period_type: str
+) -> Optional[int]:
+    """Find an alternative player_id for the same person in a different slice.
+
+    Safety net for legacy duplicates where DataLoader created separate player
+    records per file.  Constrains to same season to avoid cross-season matches.
+    """
+    origin_season = db.execute(text("""
+        SELECT ss.period_value
+        FROM player_statistics ps
+        JOIN stat_slices ss ON ps.slice_id = ss.slice_id
+        WHERE ps.player_id = :pid AND ss.tournament_id = :tid
+          AND ss.period_type = 'SEASON'
+        ORDER BY ss.uploaded_at DESC LIMIT 1
+    """), {"pid": player_id, "tid": tournament_id}).scalar()
+
+    if period_type == 'SEASON' and origin_season:
+        row = db.execute(text("""
+            SELECT p2.player_id
+            FROM players p1
+            JOIN players p2
+              ON p1.full_name = p2.full_name
+             AND p1.team_name = p2.team_name
+             AND p2.tournament_id = :tid
+            JOIN player_statistics ps2 ON ps2.player_id = p2.player_id
+            JOIN stat_slices ss2 ON ps2.slice_id = ss2.slice_id
+             AND ss2.tournament_id = :tid
+             AND ss2.slice_type = :st
+             AND ss2.period_type = 'SEASON'
+             AND ss2.period_value = :season
+            WHERE p1.player_id = :pid
+            ORDER BY ss2.uploaded_at DESC
+            LIMIT 1
+        """), {"pid": player_id, "tid": tournament_id, "st": slice_type, "season": origin_season}).fetchone()
+        return row[0] if row else None
+
+    row = db.execute(text("""
+        SELECT p2.player_id
+        FROM players p1
+        JOIN players p2
+          ON p1.full_name = p2.full_name
+         AND p1.team_name = p2.team_name
+         AND p2.tournament_id = :tid
+        JOIN player_statistics ps2 ON ps2.player_id = p2.player_id
+        JOIN stat_slices ss2 ON ps2.slice_id = ss2.slice_id
+         AND ss2.tournament_id = :tid
+         AND ss2.slice_type = :st
+         AND ss2.period_type = :pt
+        WHERE p1.player_id = :pid
+        ORDER BY ss2.uploaded_at DESC
+        LIMIT 1
+    """), {"pid": player_id, "tid": tournament_id, "st": slice_type, "pt": period_type}).fetchone()
+    return row[0] if row else None
 
 
 # ======================================================================

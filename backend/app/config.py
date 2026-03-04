@@ -55,7 +55,7 @@ class Settings(BaseSettings):
         description="Разрешённые расширения файлов"
     )
     
-    # === Настройки турниров ===
+    # === Настройки турниров (fallback, основной источник — БД) ===
     tournaments: dict = Field(
         default={
             0: {"name": "МФЛ", "full_name": "Молодёжная Футбольная Лига", "code": "mfl"},
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
             2: {"name": "ЮФЛ-2", "full_name": "Юношеская Футбольная Лига - 2", "code": "yfl2"},
             3: {"name": "ЮФЛ-3", "full_name": "Юношеская Футбольная Лига - 3", "code": "yfl3"},
         },
-        description="Справочник турниров"
+        description="Справочник турниров (fallback, данные берутся из БД)"
     )
     
     # === Статусы отслеживания игроков ===

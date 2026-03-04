@@ -73,15 +73,17 @@ CREATE TRIGGER update_tournaments_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- Заполнение справочника турниров
-INSERT INTO tournaments (id, name, full_name, short_code, current_round) VALUES
-(0, 'МФЛ', 'Молодежная Футбольная Лига', 'MFL', 0),
-(1, 'ЮФЛ-1', 'Юношеская Футбольная Лига - Первенство 1', 'YFL1', 0),
-(2, 'ЮФЛ-2', 'Юношеская Футбольная Лига - Первенство 2', 'YFL2', 0),
-(3, 'ЮФЛ-3', 'Юношеская Футбольная Лига - Первенство 3', 'YFL3', 0)
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS file_pattern VARCHAR(50);
+INSERT INTO tournaments (id, name, full_name, short_code, current_round, file_pattern) VALUES
+(0, 'МФЛ', 'Молодежная Футбольная Лига', 'MFL', 0, 'mfl'),
+(1, 'ЮФЛ-1', 'Юношеская Футбольная Лига - Первенство 1', 'YFL1', 0, 'yfl1'),
+(2, 'ЮФЛ-2', 'Юношеская Футбольная Лига - Первенство 2', 'YFL2', 0, 'yfl2'),
+(3, 'ЮФЛ-3', 'Юношеская Футбольная Лига - Первенство 3', 'YFL3', 0, 'yfl3')
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     full_name = EXCLUDED.full_name,
-    short_code = EXCLUDED.short_code;
+    short_code = EXCLUDED.short_code,
+    file_pattern = EXCLUDED.file_pattern;
 
 -- Комментарии
 COMMENT ON DATABASE football_stats IS 'База данных для хранения и анализа статистики футболистов';

@@ -54,17 +54,17 @@ export function formatDecimal(value?: number, decimals: number = 2): string {
 
 export function getTournamentName(tournamentId: number): string {
   const tournament = TOURNAMENTS[tournamentId as keyof typeof TOURNAMENTS];
-  return tournament?.name || `Турнир ${tournamentId}`;
+  return tournament?.name || `Турнир #${tournamentId}`;
 }
 
 export function getTournamentFullName(tournamentId: number): string {
   const tournament = TOURNAMENTS[tournamentId as keyof typeof TOURNAMENTS];
-  return tournament?.full_name || `Турнир ${tournamentId}`;
+  return tournament?.full_name || `Турнир #${tournamentId}`;
 }
 
 export function getTournamentCode(tournamentId: number): string {
   const tournament = TOURNAMENTS[tournamentId as keyof typeof TOURNAMENTS];
-  return tournament?.code || `T${tournamentId}`;
+  return tournament?.code || `t${tournamentId}`;
 }
 
 // === Работа со статусами отслеживания ===

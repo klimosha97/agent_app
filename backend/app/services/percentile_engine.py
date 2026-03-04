@@ -227,9 +227,21 @@ def _compute_tier_baseline(
     total_season_sid = db.execute(text("""
         SELECT slice_id FROM stat_slices
         WHERE tournament_id = :tid AND slice_type = 'TOTAL' AND period_type = 'SEASON'
+          AND period_value = :season
         ORDER BY uploaded_at DESC LIMIT 1
-    """), {"tid": tournament_id}).scalar()
+    """), {"tid": tournament_id, "season": season}).scalar()
     minutes_sid = total_season_sid or league_slice_id
+    if total_season_sid and total_season_sid != league_slice_id:
+        overlap = db.execute(text("""
+            SELECT COUNT(*) FROM player_statistics ps1
+            JOIN player_statistics ps2 ON ps1.player_id = ps2.player_id
+            WHERE ps1.slice_id = :total_sid AND ps1.metric_code = 'minutes'
+              AND ps2.slice_id = :base_sid AND ps2.metric_code = 'minutes'
+            LIMIT 1
+        """), {"total_sid": total_season_sid, "base_sid": league_slice_id}).scalar()
+        if not overlap or overlap == 0:
+            minutes_sid = league_slice_id
+            logger.info(f"TIER minutes fallback: using PER90 slice {league_slice_id}")
 
     db.execute(text("""
         WITH eligible_baseline AS (
@@ -344,17 +356,33 @@ def _compute_for_baseline(
 
     is_benchmark_baseline = baseline_kind in ("BENCHMARK", "SEASON_BENCHMARK")
 
+    baseline_season = db.execute(text("""
+        SELECT period_value FROM stat_slices
+        WHERE slice_id = :sid AND period_type = 'SEASON'
+    """), {"sid": baseline_slice_id}).scalar()
+
     total_season_sid = db.execute(text("""
         SELECT ss2.slice_id FROM stat_slices ss2
-        JOIN stat_slices ss1 ON ss1.tournament_id = ss2.tournament_id
-        WHERE ss1.slice_id = :baseline_sid
+        WHERE ss2.tournament_id = :tid
           AND ss2.slice_type = 'TOTAL' AND ss2.period_type = 'SEASON'
+          AND (:season IS NULL OR ss2.period_value = :season)
         ORDER BY ss2.uploaded_at DESC LIMIT 1
-    """), {"baseline_sid": baseline_slice_id}).scalar()
+    """), {"tid": tournament_id, "season": baseline_season}).scalar()
 
     minutes_sid = total_season_sid or baseline_slice_id
     if is_benchmark_baseline:
         minutes_sid = baseline_slice_id
+    elif total_season_sid and total_season_sid != baseline_slice_id:
+        overlap = db.execute(text("""
+            SELECT COUNT(*) FROM player_statistics ps1
+            JOIN player_statistics ps2 ON ps1.player_id = ps2.player_id
+            WHERE ps1.slice_id = :total_sid AND ps1.metric_code = 'minutes'
+              AND ps2.slice_id = :base_sid AND ps2.metric_code = 'minutes'
+            LIMIT 1
+        """), {"total_sid": total_season_sid, "base_sid": baseline_slice_id}).scalar()
+        if not overlap or overlap == 0:
+            minutes_sid = baseline_slice_id
+            logger.info(f"Minutes fallback: TOTAL slice {total_season_sid} has no player overlap with baseline {baseline_slice_id}, using baseline for minutes")
     baseline_min_minutes = 0 if is_benchmark_baseline else MIN_MINUTES_THRESHOLD
 
     db.execute(text("""
@@ -452,13 +480,23 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
         return 0
 
     player_minutes: Dict[int, float] = {}
+    scored_pids = {r[0] for r in rows}
+
+    src_slice = db.execute(text("""
+        SELECT tournament_id, period_type, period_value FROM stat_slices WHERE slice_id = :rsid
+    """), {"rsid": round_slice_id}).fetchone()
+    src_tid = src_slice[0] if src_slice else tournament_id
+    src_season = None
+    if src_slice and src_slice[1] == 'SEASON':
+        src_season = src_slice[2]
+
     total_season_sid = db.execute(text("""
         SELECT ss2.slice_id FROM stat_slices ss2
-        JOIN stat_slices ss1 ON ss1.tournament_id = ss2.tournament_id
-        WHERE ss1.slice_id = :rsid
+        WHERE ss2.tournament_id = :tid
           AND ss2.slice_type = 'TOTAL' AND ss2.period_type = 'SEASON'
+          AND (:season IS NULL OR ss2.period_value = :season)
         ORDER BY ss2.uploaded_at DESC LIMIT 1
-    """), {"rsid": round_slice_id}).scalar()
+    """), {"tid": src_tid, "season": src_season}).scalar()
     if total_season_sid:
         min_rows = db.execute(text("""
             SELECT player_id, metric_value FROM player_statistics
@@ -466,21 +504,51 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
         """), {"sid": total_season_sid}).fetchall()
         for mr in min_rows:
             player_minutes[mr[0]] = mr[1]
-    else:
+
+    matched = scored_pids & set(player_minutes.keys())
+    if len(matched) < len(scored_pids) * 0.5:
         per90_sid = db.execute(text("""
             SELECT ss2.slice_id FROM stat_slices ss2
-            JOIN stat_slices ss1 ON ss1.tournament_id = ss2.tournament_id
-            WHERE ss1.slice_id = :rsid
+            WHERE ss2.tournament_id = :tid
               AND ss2.slice_type = 'PER90' AND ss2.period_type = 'SEASON'
+              AND (:season IS NULL OR ss2.period_value = :season)
             ORDER BY ss2.uploaded_at DESC LIMIT 1
-        """), {"rsid": round_slice_id}).scalar()
+        """), {"tid": src_tid, "season": src_season}).scalar()
         if per90_sid:
             min_rows = db.execute(text("""
                 SELECT player_id, metric_value FROM player_statistics
                 WHERE slice_id = :sid AND metric_code = 'minutes' AND metric_value IS NOT NULL
             """), {"sid": per90_sid}).fetchall()
             for mr in min_rows:
+                if mr[0] not in player_minutes:
+                    player_minutes[mr[0]] = mr[1]
+
+    matched = scored_pids & set(player_minutes.keys())
+    if len(matched) < len(scored_pids) * 0.5:
+        season_filter = src_season
+        if not season_filter and total_season_sid:
+            season_filter = db.execute(text(
+                "SELECT period_value FROM stat_slices WHERE slice_id = :sid"
+            ), {"sid": total_season_sid}).scalar()
+        name_match_rows = db.execute(text("""
+            SELECT p_src.player_id, season_min.metric_value
+            FROM players p_src
+            JOIN players p_season ON p_src.full_name = p_season.full_name
+                AND p_src.team_name = p_season.team_name
+                AND p_season.tournament_id = :tid
+            JOIN player_statistics season_min ON season_min.player_id = p_season.player_id
+                AND season_min.metric_code = 'minutes'
+                AND season_min.metric_value IS NOT NULL
+            JOIN stat_slices ss ON season_min.slice_id = ss.slice_id
+                AND ss.tournament_id = :tid AND ss.period_type = 'SEASON'
+                AND (:season IS NULL OR ss.period_value = :season)
+            WHERE p_src.player_id = ANY(:pids)
+            ORDER BY ss.uploaded_at DESC
+        """), {"tid": src_tid, "pids": list(scored_pids - set(player_minutes.keys())), "season": season_filter}).fetchall()
+        for mr in name_match_rows:
+            if mr[0] not in player_minutes:
                 player_minutes[mr[0]] = mr[1]
+        logger.info(f"Minutes name-match fallback: matched {len(scored_pids & set(player_minutes.keys()))}/{len(scored_pids)}")
 
     pos_totals = {}
     config_rows = db.execute(text("""
