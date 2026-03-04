@@ -444,6 +444,10 @@ async def get_season_top_by_position(
     if not per90_slice_id:
         return {"success": True, "data": {}, "message": "Нет PER90 данных за сезон"}
 
+    slice_season = db.execute(text(
+        "SELECT period_value FROM stat_slices WHERE slice_id = :sid"
+    ), {"sid": per90_slice_id}).scalar()
+
     # Check if season scores exist
     score_count = db.execute(text("""
         SELECT COUNT(*) FROM round_scores
@@ -501,12 +505,16 @@ async def get_season_top_by_position(
         "lpp": limit_per_position,
     }).fetchall()
 
-    # Group by comparison_group
     CG_NAMES = {
         'НАП': 'Нападающие', 'АП Ц': 'Атакующие ПЗ центральные',
         'ФЛ': 'Фланговые', 'ПЗ Ц': 'Полузащитники центральные',
         'ОП': 'Опорные полузащитники', 'ЦЗ': 'Центральные защитники',
         'КЗ': 'Крайние защитники',
+    }
+    CG_GROUPS = {
+        'НАП': 'ATT', 'АП Ц': 'ATT', 'ФЛ': 'ATT',
+        'ПЗ Ц': 'MID',
+        'ОП': 'DEF', 'ЦЗ': 'DEF', 'КЗ': 'DEF',
     }
     positions = {}
     for r in rows:
@@ -515,7 +523,7 @@ async def get_season_top_by_position(
             positions[cg] = {
                 "position_code": cg,
                 "position_name": CG_NAMES.get(cg, cg),
-                "position_group": r[5],
+                "position_group": CG_GROUPS.get(cg, r[5]),
                 "players": [],
             }
         positions[cg]["players"].append({
@@ -523,7 +531,8 @@ async def get_season_top_by_position(
             "player_id": r[0],
             "full_name": r[1],
             "team_name": r[2],
-            "position_detail": r[3],  # exact position code
+            "position_detail": r[3],
+            "season": slice_season,
             "core_score": r[6],
             "support_score": r[7],
             "total_score": r[8],
@@ -537,7 +546,7 @@ async def get_season_top_by_position(
             "insufficient_minutes": r[18],
         })
 
-    return {"success": True, "data": positions, "total_positions": len(positions)}
+    return {"success": True, "data": positions, "season": slice_season, "total_positions": len(positions)}
 
 
 @router.get("/season/{tournament_id}/top", summary="Общий топ за сезон")
@@ -566,6 +575,10 @@ async def get_season_top(
 
     if not per90_slice_id:
         return {"success": True, "data": [], "message": "Нет PER90 данных за сезон"}
+
+    flat_slice_season = db.execute(text(
+        "SELECT period_value FROM stat_slices WHERE slice_id = :sid"
+    ), {"sid": per90_slice_id}).scalar()
 
     ALLOWED_SORTS = ("core_score_adj", "total_score", "support_score_adj", "support_score", "core_score", "good_share_core")
     safe_sort = sort_by if sort_by in ALLOWED_SORTS else "total_score"
@@ -629,9 +642,10 @@ async def get_season_top(
             "risk_flags": r[14] or {},
             "insufficient_data": r[15],
             "insufficient_minutes": r[16],
+            "season": flat_slice_season,
         })
 
-    return {"success": True, "data": data, "total": len(data)}
+    return {"success": True, "data": data, "season": flat_slice_season, "total": len(data)}
 
 
 # ======================================================================
@@ -777,12 +791,16 @@ async def get_round_top_by_position(
         "lpp": limit_per_position,
     }).fetchall()
 
-    # Group by comparison_group
     CG_NAMES = {
         'НАП': 'Нападающие', 'АП Ц': 'Атакующие ПЗ центральные',
         'ФЛ': 'Фланговые', 'ПЗ Ц': 'Полузащитники центральные',
         'ОП': 'Опорные полузащитники', 'ЦЗ': 'Центральные защитники',
         'КЗ': 'Крайние защитники',
+    }
+    CG_GROUPS = {
+        'НАП': 'ATT', 'АП Ц': 'ATT', 'ФЛ': 'ATT',
+        'ПЗ Ц': 'MID',
+        'ОП': 'DEF', 'ЦЗ': 'DEF', 'КЗ': 'DEF',
     }
     positions = {}
     for r in rows:
@@ -791,7 +809,7 @@ async def get_round_top_by_position(
             positions[cg] = {
                 "position_code": cg,
                 "position_name": CG_NAMES.get(cg, cg),
-                "position_group": r[5],
+                "position_group": CG_GROUPS.get(cg, r[5]),
                 "players": [],
             }
         positions[cg]["players"].append({
@@ -799,7 +817,7 @@ async def get_round_top_by_position(
             "player_id": r[0],
             "full_name": r[1],
             "team_name": r[2],
-            "position_detail": r[3],  # exact position code
+            "position_detail": r[3],
             "core_score": r[6],
             "support_score": r[7],
             "total_score": r[8],

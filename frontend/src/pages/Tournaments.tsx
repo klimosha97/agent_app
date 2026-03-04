@@ -340,7 +340,7 @@ export const Tournaments: React.FC = () => {
       setCurrentPage(1);
       setSortField('goals');
       setSortOrder('desc');
-      setSelectedSeason('__all__');
+      setSelectedSeason(null);
     }
     if (selectedSection === 'last_round_players') {
       setRoundSearchInput('');
@@ -727,12 +727,15 @@ export const Tournaments: React.FC = () => {
               onChange={(e) => { setSelectedSeason(e.target.value || null); setCurrentPage(1); }}
               className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-700 cursor-pointer hover:border-purple-300 focus:outline-none focus:ring-1 focus:ring-purple-400"
             >
-              <option value="__all__">Все сезоны</option>
+              <option value="">Текущий сезон</option>
               {availableSeasons.map(s => (
                 <option key={s.period_value} value={s.period_value}>
                   Сезон {s.period_value} ({s.players_count} игр.)
                 </option>
               ))}
+              {availableSeasons.length > 1 && (
+                <option value="__all__">Все сезоны</option>
+              )}
             </select>
 
             {/* Настроить корзины */}
@@ -2411,15 +2414,16 @@ const SEASON_BASELINE_OPTIONS = [
 ];
 
 const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
-  const { tournament, onBack, onPlayerClick, sortBy, setSortBy, funnel, setFunnel, selectedSeason, availableSeasons, onSeasonChange } = props;
+  const { tournament, onBack, onPlayerClick, sortBy, setSortBy, funnel, setFunnel, availableSeasons } = props;
   const [recomputing, setRecomputing] = useState(false);
   const [localSort, setLocalSort] = useState<string>('core_score_adj');
   const [localSortDir, setLocalSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
-  const [showPositions, setShowPositions] = useState(false);
+  const [showPositions, setShowPositions] = useState(true);
   const [seasonBaseline, setSeasonBaseline] = useState<string>('SEASON');
+  const [localSeason, setLocalSeason] = useState<string | null>(null);
 
-  const seasonParam = selectedSeason && selectedSeason !== '__all__' ? selectedSeason : undefined;
+  const seasonParam = localSeason || undefined;
 
   // Benchmark state
   const benchmarkFileRef = useRef<HTMLInputElement>(null);
@@ -2436,13 +2440,13 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
   const { data: flatData, isLoading: flatLoading, refetch } = useQuery(
     ['season-top-flat', tournament.id, sortBy, funnel, seasonBaseline, seasonParam],
     () => apiService.getSeasonTop(tournament.id, { sort_by: sortBy || 'core_score_adj', funnel, baseline_kind: seasonBaseline, season: seasonParam, limit: 200 }),
-    { keepPreviousData: true }
   );
 
+  const posLimitPerGroup = funnel !== 'all' ? 50 : 10;
   const { data: posByPosData, isLoading: posByPosLoading } = useQuery(
-    ['season-top-position', tournament.id, sortBy, funnel, seasonBaseline, seasonParam],
-    () => apiService.getSeasonTopByPosition(tournament.id, { sort_by: sortBy, funnel, baseline_kind: seasonBaseline, season: seasonParam, limit_per_position: 10 }),
-    { enabled: showPositions, keepPreviousData: true }
+    ['season-top-position', tournament.id, sortBy, funnel, seasonBaseline, seasonParam, posLimitPerGroup],
+    () => apiService.getSeasonTopByPosition(tournament.id, { sort_by: sortBy, funnel, baseline_kind: seasonBaseline, season: seasonParam, limit_per_position: posLimitPerGroup }),
+    { enabled: showPositions }
   );
 
   useEffect(() => { setPage(1); }, [localSort, localSortDir, funnel, seasonBaseline]);
@@ -2556,8 +2560,8 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
         <div className="flex items-center gap-3">
           {availableSeasons && availableSeasons.length > 1 && (
             <select
-              value={selectedSeason ?? ''}
-              onChange={(e) => { onSeasonChange?.(e.target.value || null); setPage(1); }}
+              value={localSeason ?? ''}
+              onChange={(e) => { setLocalSeason(e.target.value || null); setPage(1); }}
               className="px-3 py-2 text-sm font-medium rounded-lg border border-purple-200 bg-purple-50 text-purple-700 cursor-pointer hover:border-purple-400 focus:outline-none focus:ring-1 focus:ring-purple-400"
             >
               <option value="">Текущий сезон</option>
@@ -2849,7 +2853,10 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
                         className="hover:bg-purple-50 cursor-pointer transition-colors"
                       >
                         <td className="px-3 py-2 text-sm text-gray-400 w-8">{(page - 1) * SEASON_PAGE_SIZE + idx + 1}</td>
-                        <td className="px-3 py-2 text-sm font-medium text-blue-600 hover:underline">{p.full_name}</td>
+                        <td className="px-3 py-2 text-sm font-medium text-blue-600 hover:underline">
+                          {p.full_name}
+                          {p.season && <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 text-purple-600">{p.season}</span>}
+                        </td>
                         <td className="px-3 py-2 text-sm text-gray-600"><span className="flex items-center">{p.team_name}<TierDot teamName={p.team_name} tierMap={props.teamTierMap} /></span></td>
                         <td className="px-3 py-2 text-center">
                           <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-purple-100 text-purple-800">{p.position_code}</span>
@@ -2976,6 +2983,9 @@ const TopByPositionSection: React.FC<AnalysisSectionProps> = (props) => {
                                   {p.full_name}
                                   {p.position_detail && (
                                     <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-500">{p.position_detail}</span>
+                                  )}
+                                  {p.season && (
+                                    <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 text-purple-600">{p.season}</span>
                                   )}
                                 </td>
                                 <td className="px-3 py-1.5 text-sm text-gray-600"><span className="flex items-center">{p.team_name}<TierDot teamName={p.team_name} tierMap={props.teamTierMap} /></span></td>
