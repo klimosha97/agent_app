@@ -668,6 +668,19 @@ async def get_round_top(
     if not round_slice_id:
         return {"success": True, "data": [], "message": "Данные тура не найдены"}
 
+    # Если скоров ещё нет — один раз пересчитать (чтобы не требовать ручное «Пересчитать тур»)
+    score_count = db.execute(text("""
+        SELECT COUNT(*) FROM round_scores
+        WHERE round_slice_id = :rsid AND baseline_kind = :bk
+    """), {"rsid": round_slice_id, "bk": baseline_kind}).scalar()
+    if not score_count or score_count == 0:
+        try:
+            from app.services.percentile_engine import compute_round_analysis
+            season = _get_season(db, tournament_id)
+            compute_round_analysis(db=db, round_slice_id=round_slice_id, tournament_id=tournament_id, season=season)
+        except Exception as e:
+            logger.warning(f"Auto-recompute round analysis failed: {e}")
+
     ALLOWED_SORTS = ("core_score_adj", "total_score", "support_score_adj", "support_score", "core_score", "good_share_core")
     safe_sort = sort_by if sort_by in ALLOWED_SORTS else "total_score"
 
@@ -749,6 +762,19 @@ async def get_round_top_by_position(
     round_slice_id = _find_round_slice(db, tournament_id, round_number)
     if not round_slice_id:
         return {"success": True, "data": {}, "message": "Данные тура не найдены"}
+
+    # Если скоров ещё нет — один раз пересчитать
+    score_count = db.execute(text("""
+        SELECT COUNT(*) FROM round_scores
+        WHERE round_slice_id = :rsid AND baseline_kind = :bk
+    """), {"rsid": round_slice_id, "bk": baseline_kind}).scalar()
+    if not score_count or score_count == 0:
+        try:
+            from app.services.percentile_engine import compute_round_analysis
+            season = _get_season(db, tournament_id)
+            compute_round_analysis(db=db, round_slice_id=round_slice_id, tournament_id=tournament_id, season=season)
+        except Exception as e:
+            logger.warning(f"Auto-recompute round analysis failed: {e}")
 
     ALLOWED_SORTS = ("core_score_adj", "total_score", "support_score_adj", "support_score", "core_score", "good_share_core")
     safe_sort = sort_by if sort_by in ALLOWED_SORTS else "total_score"
@@ -973,6 +999,65 @@ async def get_player_history(
     return {"success": True, "data": data, "player_id": player_id, "baseline_kind": baseline_kind}
 
 
+@router.get("/player/{player_id}/metrics-history", summary="История перцентилей метрик по турам")
+async def get_player_metrics_history(
+    player_id: int = Path(...),
+    tournament_id: int = Query(...),
+    baseline_kind: str = Query("LEAGUE"),
+    db: Session = Depends(get_db),
+):
+    """Перцентили каждой метрики за каждый тур + агрегированные скоры."""
+    pct_rows = db.execute(text("""
+        SELECT CAST(ss.period_value AS INTEGER) as round_number,
+               rp.metric_code, rp.bucket, rp.percentile, rp.value,
+               COALESCE(mc.display_name_ru, rp.metric_code) as display_name
+        FROM round_percentiles rp
+        JOIN stat_slices ss ON rp.round_slice_id = ss.slice_id
+        LEFT JOIN metrics_catalog mc ON mc.metric_code = rp.metric_code
+        WHERE ss.tournament_id = :tid AND ss.period_type = 'ROUND'
+          AND rp.player_id = :pid AND rp.baseline_kind = :bk
+        ORDER BY round_number, rp.metric_code
+    """), {"tid": tournament_id, "pid": player_id, "bk": baseline_kind}).fetchall()
+
+    score_rows = db.execute(text("""
+        SELECT CAST(ss.period_value AS INTEGER) as round_number,
+               rs.core_score, rs.support_score, rs.total_score,
+               rs.core_score_adj, rs.support_score_adj, rs.good_share_core
+        FROM round_scores rs
+        JOIN stat_slices ss ON rs.round_slice_id = ss.slice_id
+        WHERE ss.tournament_id = :tid AND ss.period_type = 'ROUND'
+          AND rs.player_id = :pid AND rs.baseline_kind = :bk
+        ORDER BY round_number
+    """), {"tid": tournament_id, "pid": player_id, "bk": baseline_kind}).fetchall()
+
+    rounds_set: set = set()
+    metrics: dict = {}
+    for r in pct_rows:
+        rn = r[0]
+        rounds_set.add(rn)
+        mc = r[1]
+        if mc not in metrics:
+            metrics[mc] = {"bucket": r[2], "display_name": r[5], "values": []}
+        metrics[mc]["values"].append({"round": rn, "percentile": r[3], "value": r[4]})
+
+    scores: dict = {}
+    for r in score_rows:
+        rn = r[0]
+        rounds_set.add(rn)
+        scores[str(rn)] = {
+            "core_score": r[1], "support_score": r[2], "total_score": r[3],
+            "core_score_adj": r[4], "support_score_adj": r[5], "good_share_core": r[6],
+        }
+
+    return {
+        "success": True,
+        "player_id": player_id,
+        "rounds": sorted(rounds_set),
+        "scores": scores,
+        "metrics": metrics,
+    }
+
+
 # ======================================================================
 # Phase 6: Player profile — полные перцентили по позиции
 # ======================================================================
@@ -981,6 +1066,7 @@ async def get_player_history(
 async def get_player_percentiles(
     player_id: int = Path(...),
     round_number: Optional[int] = Query(None, description="Номер тура (если не указан — только сезон)"),
+    season: Optional[str] = Query(None, description="Сезон (period_value). Если не указан — последний"),
     db: Session = Depends(get_db),
 ):
     """
@@ -1053,13 +1139,22 @@ async def get_player_percentiles(
     }
 
     # 3. Сезонные перцентили (baseline_kind = 'SEASON')
-    per90_slice_id = db.execute(text("""
-        SELECT ss.slice_id FROM stat_slices ss
-        JOIN player_statistics ps ON ps.slice_id = ss.slice_id
-        WHERE ss.tournament_id = :tid AND ss.slice_type = 'PER90' AND ss.period_type = 'SEASON'
-          AND ps.player_id = :pid
-        ORDER BY ss.uploaded_at DESC LIMIT 1
-    """), {"tid": tournament_id, "pid": player_id}).scalar()
+    if season:
+        per90_slice_id = db.execute(text("""
+            SELECT ss.slice_id FROM stat_slices ss
+            JOIN player_statistics ps ON ps.slice_id = ss.slice_id
+            WHERE ss.tournament_id = :tid AND ss.slice_type = 'PER90' AND ss.period_type = 'SEASON'
+              AND ps.player_id = :pid AND ss.period_value = :season
+            ORDER BY ss.uploaded_at DESC LIMIT 1
+        """), {"tid": tournament_id, "pid": player_id, "season": season}).scalar()
+    else:
+        per90_slice_id = db.execute(text("""
+            SELECT ss.slice_id FROM stat_slices ss
+            JOIN player_statistics ps ON ps.slice_id = ss.slice_id
+            WHERE ss.tournament_id = :tid AND ss.slice_type = 'PER90' AND ss.period_type = 'SEASON'
+              AND ps.player_id = :pid
+            ORDER BY ss.uploaded_at DESC LIMIT 1
+        """), {"tid": tournament_id, "pid": player_id}).scalar()
 
     score_pid = player_id
     if per90_slice_id:

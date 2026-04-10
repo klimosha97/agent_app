@@ -277,6 +277,53 @@ export const SORT_FIELDS = [
   { value: 'minutes_played', label: 'Минуты' },
 ] as const;
 
+// === ИИ Скаут-ассистент ===
+
+export interface AiChart {
+  type: 'radar' | 'bar' | 'line' | 'multi_line';
+  title: string;
+  data: any[];
+  players?: string[];
+}
+
+export interface AiHighlightedPlayer {
+  player_id: number;
+  full_name: string;
+  team_name: string;
+  position_name: string;
+  reason: string;
+}
+
+export interface AiResponse {
+  success: boolean;
+  text: string;
+  charts: AiChart[];
+  highlighted_players: AiHighlightedPlayer[];
+}
+
+export interface AiMessage {
+  id: string;
+  role: 'user' | 'ai';
+  content: string;
+  charts?: AiChart[];
+  highlighted_players?: AiHighlightedPlayer[];
+  loading?: boolean;
+  timestamp: number;
+}
+
+// === Еженедельный дайджест ===
+
+export interface WeeklyDigestReport {
+  tournament_id: number;
+  tournament_name: string;
+  tournament_full_name: string;
+  round_number: number | null;
+  status: 'new' | 'cached' | 'no_data';
+  text: string;
+  charts: AiChart[];
+  highlighted_players: AiHighlightedPlayer[];
+}
+
 // === Утилитарные типы ===
 
 export type ApiResponse<T> = T & BaseResponse;
@@ -286,3 +333,5 @@ export type WithLoading<T> = T & LoadingState;
 export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
 export type RequiredFields<T, K extends keyof T> = T & Required<Pick<T, K>>;
+
+

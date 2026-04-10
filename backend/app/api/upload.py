@@ -325,10 +325,11 @@ async def upload_round_data(
             force_new_season=False
         )
         
-        # 6. Обновляем current_round турнира (только если загруженный тур больше текущего)
+        # 6. Обновляем current_round турнира — ставим номер только что загруженного тура
+        # (при загрузке 1-го тура нового сезона не оставляем старый current_round от прошлого сезона)
         db.execute(text("""
             UPDATE tournaments 
-            SET current_round = GREATEST(COALESCE(current_round, 0), :round_number),
+            SET current_round = :round_number,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :tournament_id
         """), {

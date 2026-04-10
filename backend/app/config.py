@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     # === Настройки API ===
     api_prefix: str = Field(default="/api", description="Префикс для API роутов")
     
+    # === Настройки ИИ-агента (DeepSeek) ===
+    openai_api_key: str = Field(default="", description="API key (DeepSeek или OpenAI-совместимый)")
+    openai_base_url: str = Field(default="https://api.deepseek.com", description="Base URL API")
+    ai_model: str = Field(default="deepseek-chat", description="Модель LLM")
+    ai_enabled: bool = Field(default=True, description="Включить ИИ-агента")
+    
     class Config:
         """Конфигурация pydantic модели"""
         env_file = ".env"  # Файл с переменными окружения

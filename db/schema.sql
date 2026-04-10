@@ -362,3 +362,23 @@ CREATE INDEX idx_slices_tournament_period ON stat_slices(tournament_id, period_t
 
 COMMENT ON INDEX idx_stats_metric_value IS 'Ускоряет фильтрацию по значениям метрик (WHERE shots > 5)';
 
+
+-- ============================================
+-- КЭШ ИИ-ОБЗОРОВ
+-- ============================================
+CREATE TABLE IF NOT EXISTS ai_reviews (
+    id SERIAL PRIMARY KEY,
+    tournament_id INT NOT NULL,
+    round_number INT,
+    review_type VARCHAR(50) NOT NULL,
+    player_ids INT[],
+    content JSONB NOT NULL,
+    data_hash VARCHAR(64),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_reviews_lookup
+    ON ai_reviews(tournament_id, round_number, review_type, data_hash);
+
+COMMENT ON TABLE ai_reviews IS 'Кэш ответов ИИ-скаут-ассистента';
+

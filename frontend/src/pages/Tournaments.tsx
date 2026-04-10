@@ -24,6 +24,7 @@ import {
   ArrowUpIcon,
   ArrowDownIcon,
   ArrowsUpDownIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { useTournaments } from '../hooks/useApi';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
@@ -40,6 +41,7 @@ import { FlagIcon } from '@heroicons/react/24/solid';
 import { usePlayerNavigation } from '../App';
 import { PlayerComparisonCard } from '../components/PlayerComparisonCard';
 import { TierEditor } from '../components/TierEditor';
+import { AiAgentSection } from '../components/AiAgentSection';
 
 // Определение колонок для таблицы игроков турнира
 interface ColumnDef {
@@ -189,7 +191,7 @@ const DEFAULT_VISIBLE_COLUMNS = [
 ];
 
 // Типы секций внутри турнира
-type TournamentSection = 'overview' | 'best_performances' | 'new_faces' | 'all_players' | 'last_round_players' | 'top_by_position';
+type TournamentSection = 'overview' | 'best_performances' | 'new_faces' | 'all_players' | 'last_round_players' | 'top_by_position' | 'ai_agent';
 type PeriodType = 'SEASON' | 'ROUND';
 
 // Конфигурация плиток для страницы турнира
@@ -229,7 +231,16 @@ const TOURNAMENT_TILES = [
     color: 'from-purple-500 to-pink-600',
     bgColor: 'bg-gradient-to-br from-purple-50 to-pink-50',
     iconColor: 'text-purple-600',
-  }
+  },
+  {
+    id: 'ai_agent' as TournamentSection,
+    title: 'ИИ Скаут-ассистент',
+    description: 'Автоматический анализ тура, сезона и игроков',
+    icon: SparklesIcon,
+    color: 'from-violet-500 to-indigo-600',
+    bgColor: 'bg-gradient-to-br from-violet-50 to-indigo-50',
+    iconColor: 'text-violet-600',
+  },
 ];
 
 // Helpers for sessionStorage persistence
@@ -238,7 +249,7 @@ function ssSet(key: string, val: string) { try { sessionStorage.setItem(key, val
 function ssRemove(key: string) { try { sessionStorage.removeItem(key); } catch {} }
 function ssGetNum(key: string): number | null { const v = ssGet(key); return v !== null ? Number(v) : null; }
 
-const VALID_SECTIONS: TournamentSection[] = ['overview', 'all_players', 'last_round_players', 'best_performances', 'top_by_position', 'new_faces'];
+const VALID_SECTIONS: TournamentSection[] = ['overview', 'all_players', 'last_round_players', 'best_performances', 'top_by_position', 'new_faces', 'ai_agent'];
 
 export const Tournaments: React.FC = () => {
   const { setSelectedPlayerId } = usePlayerNavigation();
@@ -1637,6 +1648,26 @@ export const Tournaments: React.FC = () => {
         return renderTopByPositionSection();
       } else if (selectedSection === 'new_faces') {
         return renderNewFacesSection();
+      } else if (selectedSection === 'ai_agent') {
+        return (
+          <div className="space-y-6">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => setSelectedSection('overview')}
+                className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+              >
+                <ArrowLeftIcon className="w-4 h-4" />
+                {selectedTournament.full_name}
+              </button>
+            </div>
+            <AiAgentSection
+              tournamentId={selectedTournament.id}
+              tournamentName={selectedTournament.full_name || selectedTournament.name}
+              currentRound={currentRound || undefined}
+              availableRounds={availableRounds}
+            />
+          </div>
+        );
       } else {
         return renderStubSection(selectedSection);
       }
@@ -2062,7 +2093,7 @@ function AnalysisControls({ baseline, setBaseline, sortBy, setSortBy, funnel, se
             <select
               value={displayRound}
               onChange={(e) => setAnalysisRound?.(Number(e.target.value))}
-              className="px-3 py-2 border border-amber-300 rounded-lg bg-amber-50 text-amber-800 font-bold text-sm focus:ring-2 focus:ring-amber-500 cursor-pointer"
+              className="pl-3 pr-8 py-2 border border-amber-300 rounded-lg bg-amber-50 text-amber-800 font-bold text-sm focus:ring-2 focus:ring-amber-500 cursor-pointer"
             >
               {availableRounds.map((r) => (
                 <option key={r} value={r}>Тур {r}</option>

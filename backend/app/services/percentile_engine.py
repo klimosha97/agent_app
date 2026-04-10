@@ -45,13 +45,33 @@ def compute_round_analysis(
     tier_season = _resolve_tier_season(db, tournament_id) or season
 
     league_slice_id = _find_league_baseline(db, tournament_id, season=season)
+    use_season_baseline = False
     if league_slice_id:
+        # Проверяем достаточно ли игроков с 200+ минут в сезонном baseline
+        eligible_count = db.execute(text("""
+            SELECT COUNT(DISTINCT player_id) FROM player_statistics
+            WHERE slice_id = :sid AND metric_code = 'minutes' AND metric_value > :min_min
+        """), {"sid": league_slice_id, "min_min": MIN_MINUTES_THRESHOLD}).scalar() or 0
+        use_season_baseline = eligible_count >= 5
+
+    if use_season_baseline:
         n = _compute_for_baseline(db, round_slice_id, league_slice_id, "LEAGUE", tournament_id)
         computed_baselines.append("LEAGUE")
         total_players = max(total_players, n)
         logger.info(f"LEAGUE baseline: {n} players processed")
     else:
-        warnings.append("Нет сезонных PER90 данных для LEAGUE baseline")
+        # Fallback: нет PER90 SEASON или мало игроков с 200+ мин — сравниваем внутри тура
+        n = _compute_for_baseline(db, round_slice_id, round_slice_id, "LEAGUE", tournament_id)
+        if n:
+            computed_baselines.append("LEAGUE")
+            total_players = max(total_players, n)
+            logger.info(f"LEAGUE baseline (fallback: within round): {n} players processed")
+            if league_slice_id:
+                warnings.append("Мало данных в PER90 за сезон — рейтинг рассчитан внутри тура")
+            else:
+                warnings.append("Нет PER90 за сезон — рейтинг рассчитан только внутри тура")
+        else:
+            warnings.append("Нет сезонных PER90 данных для LEAGUE baseline")
 
     tier_result = _compute_tier_baseline(db, round_slice_id, tournament_id, tier_season)
     if tier_result:
@@ -356,34 +376,40 @@ def _compute_for_baseline(
 
     is_benchmark_baseline = baseline_kind in ("BENCHMARK", "SEASON_BENCHMARK")
 
-    baseline_season = db.execute(text("""
-        SELECT period_value FROM stat_slices
-        WHERE slice_id = :sid AND period_type = 'SEASON'
-    """), {"sid": baseline_slice_id}).scalar()
+    # Fallback: тур как свой baseline (сравнение внутри тура), если нет PER90 SEASON
+    use_round_as_baseline = round_slice_id == baseline_slice_id
+    if use_round_as_baseline:
+        minutes_sid = round_slice_id
+        baseline_min_minutes = 0
+    else:
+        baseline_season = db.execute(text("""
+            SELECT period_value FROM stat_slices
+            WHERE slice_id = :sid AND period_type = 'SEASON'
+        """), {"sid": baseline_slice_id}).scalar()
 
-    total_season_sid = db.execute(text("""
-        SELECT ss2.slice_id FROM stat_slices ss2
-        WHERE ss2.tournament_id = :tid
-          AND ss2.slice_type = 'TOTAL' AND ss2.period_type = 'SEASON'
-          AND (:season IS NULL OR ss2.period_value = :season)
-        ORDER BY ss2.uploaded_at DESC LIMIT 1
-    """), {"tid": tournament_id, "season": baseline_season}).scalar()
+        total_season_sid = db.execute(text("""
+            SELECT ss2.slice_id FROM stat_slices ss2
+            WHERE ss2.tournament_id = :tid
+              AND ss2.slice_type = 'TOTAL' AND ss2.period_type = 'SEASON'
+              AND (:season IS NULL OR ss2.period_value = :season)
+            ORDER BY ss2.uploaded_at DESC LIMIT 1
+        """), {"tid": tournament_id, "season": baseline_season}).scalar()
 
-    minutes_sid = total_season_sid or baseline_slice_id
-    if is_benchmark_baseline:
-        minutes_sid = baseline_slice_id
-    elif total_season_sid and total_season_sid != baseline_slice_id:
-        overlap = db.execute(text("""
-            SELECT COUNT(*) FROM player_statistics ps1
-            JOIN player_statistics ps2 ON ps1.player_id = ps2.player_id
-            WHERE ps1.slice_id = :total_sid AND ps1.metric_code = 'minutes'
-              AND ps2.slice_id = :base_sid AND ps2.metric_code = 'minutes'
-            LIMIT 1
-        """), {"total_sid": total_season_sid, "base_sid": baseline_slice_id}).scalar()
-        if not overlap or overlap == 0:
+        minutes_sid = total_season_sid or baseline_slice_id
+        if is_benchmark_baseline:
             minutes_sid = baseline_slice_id
-            logger.info(f"Minutes fallback: TOTAL slice {total_season_sid} has no player overlap with baseline {baseline_slice_id}, using baseline for minutes")
-    baseline_min_minutes = 0 if is_benchmark_baseline else MIN_MINUTES_THRESHOLD
+        elif total_season_sid and total_season_sid != baseline_slice_id:
+            overlap = db.execute(text("""
+                SELECT COUNT(*) FROM player_statistics ps1
+                JOIN player_statistics ps2 ON ps1.player_id = ps2.player_id
+                WHERE ps1.slice_id = :total_sid AND ps1.metric_code = 'minutes'
+                  AND ps2.slice_id = :base_sid AND ps2.metric_code = 'minutes'
+                LIMIT 1
+            """), {"total_sid": total_season_sid, "base_sid": baseline_slice_id}).scalar()
+            if not overlap or overlap == 0:
+                minutes_sid = baseline_slice_id
+                logger.info(f"Minutes fallback: TOTAL slice {total_season_sid} has no player overlap with baseline {baseline_slice_id}, using baseline for minutes")
+        baseline_min_minutes = 0 if is_benchmark_baseline else MIN_MINUTES_THRESHOLD
 
     db.execute(text("""
         WITH eligible_baseline AS (
@@ -487,6 +513,7 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
     """), {"rsid": round_slice_id}).fetchone()
     src_tid = src_slice[0] if src_slice else tournament_id
     src_season = None
+    is_round_slice = src_slice and src_slice[1] == 'ROUND'
     if src_slice and src_slice[1] == 'SEASON':
         src_season = src_slice[2]
 
@@ -619,7 +646,8 @@ def _aggregate_scores(db: Session, round_slice_id: int, baseline_kind: str, tour
         insufficient_data = (used_core < 4 or core_coverage < 0.6)
 
         player_min = player_minutes.get(player_id, 0)
-        insufficient_minutes = (player_min <= MIN_MINUTES_THRESHOLD)
+        # Для анализа тура порог 200 минут не применяется — он для сезонной выборки
+        insufficient_minutes = False if is_round_slice else (player_min <= MIN_MINUTES_THRESHOLD)
 
         risk_flags = {}
         for rm in data["risk"]:

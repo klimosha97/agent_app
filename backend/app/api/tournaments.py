@@ -81,11 +81,13 @@ async def get_tournaments(db: Session = Depends(get_db)):
                       )
                 ) as players_count,
                 (
-                    SELECT MAX(CAST(ss.period_value AS INTEGER))
+                    SELECT CAST(ss.period_value AS INTEGER)
                     FROM stat_slices ss
                     WHERE ss.tournament_id = t.id
                       AND ss.period_type = 'ROUND'
                       AND ss.period_value ~ '^\d+$'
+                    ORDER BY ss.uploaded_at DESC
+                    LIMIT 1
                 ) as last_loaded_round
             FROM tournaments t
             GROUP BY t.id, t.name, t.full_name, t.short_code, t.current_round, t.updated_at

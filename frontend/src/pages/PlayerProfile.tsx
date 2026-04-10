@@ -48,18 +48,31 @@ const CATEGORY_NAMES: Record<string, string> = {
 const CATEGORY_ORDER = ['basic', 'scoring', 'shooting', 'passing', 'duels', 'dribbling', 'defense', 'discipline', 'errors'];
 
 export const PlayerProfile: React.FC<PlayerProfileProps> = ({ playerId, onBack }) => {
-  // Состояния для выбора слайса
+  const queryClient = useQueryClient();
   const [sliceType, setSliceType] = useState<'TOTAL' | 'PER90'>('TOTAL');
   const [periodType, setPeriodType] = useState<'SEASON' | 'ROUND'>('SEASON');
   const [selectedRound, setSelectedRound] = useState<number | null>(null);
-  // Перцентили: выбранный тур
   const [pctRound, setPctRound] = useState<number | undefined>(undefined);
 
-  // Загружаем базовую информацию об игроке
   const { data: playerInfo, isLoading: isLoadingInfo } = useQuery(
     ['player-info', playerId],
     () => apiService.getPlayerInfo(playerId),
     { enabled: !!playerId }
+  );
+
+  const { data: watchStatus } = useQuery(
+    ['watch-status', playerId],
+    () => apiService.checkWatchedStatus(playerId),
+    { enabled: !!playerId }
+  );
+
+  const addToList = useMutation(
+    (listType: 'MY' | 'TRACKED') => apiService.addWatchedPlayer(playerId, listType),
+    { onSuccess: () => { queryClient.invalidateQueries(['watch-status', playerId]); queryClient.invalidateQueries(['watched-players']); } }
+  );
+  const removeFromList = useMutation(
+    (listType: 'MY' | 'TRACKED') => apiService.removeWatchedPlayer(playerId, listType),
+    { onSuccess: () => { queryClient.invalidateQueries(['watch-status', playerId]); queryClient.invalidateQueries(['watched-players']); } }
   );
 
   // Загружаем доступные слайсы
@@ -195,6 +208,34 @@ export const PlayerProfile: React.FC<PlayerProfileProps> = ({ playerId, onBack }
                     {player.position_code}
                   </Badge>
                   <span className="text-sm text-blue-200">{player.position_name}</span>
+                </div>
+                <div className="flex items-center gap-2 mt-3">
+                  <button
+                    onClick={() => watchStatus?.in_my ? removeFromList.mutate('MY') : addToList.mutate('MY')}
+                    disabled={addToList.isLoading || removeFromList.isLoading}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                      watchStatus?.in_my
+                        ? 'bg-white/30 text-white hover:bg-white/40'
+                        : 'bg-white/10 text-blue-100 hover:bg-white/20 hover:text-white'
+                    }`}
+                    title={watchStatus?.in_my ? 'Убрать из моих' : 'Добавить в мои'}
+                  >
+                    {watchStatus?.in_my ? <CheckCircleIcon className="w-4 h-4" /> : <UserPlusIcon className="w-4 h-4" />}
+                    {watchStatus?.in_my ? 'Мой игрок' : 'В мои'}
+                  </button>
+                  <button
+                    onClick={() => watchStatus?.in_tracked ? removeFromList.mutate('TRACKED') : addToList.mutate('TRACKED')}
+                    disabled={addToList.isLoading || removeFromList.isLoading}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${
+                      watchStatus?.in_tracked
+                        ? 'bg-white/30 text-white hover:bg-white/40'
+                        : 'bg-white/10 text-blue-100 hover:bg-white/20 hover:text-white'
+                    }`}
+                    title={watchStatus?.in_tracked ? 'Убрать из отслеживаемых' : 'Добавить в отслеживаемые'}
+                  >
+                    {watchStatus?.in_tracked ? <CheckCircleIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+                    {watchStatus?.in_tracked ? 'Отслеживается' : 'Отслеживать'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -594,7 +635,7 @@ const PercentileSection: React.FC<PercentileSectionProps> = ({
               <select
                 value={pctRound || ''}
                 onChange={(e) => setPctRound(Number(e.target.value))}
-                className="px-3 py-1.5 border border-amber-300 rounded-lg bg-amber-50 text-amber-800 font-bold text-xs focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                className="pl-3 pr-8 py-1.5 border border-amber-300 rounded-lg bg-amber-50 text-amber-800 font-bold text-xs focus:ring-2 focus:ring-amber-500 cursor-pointer"
               >
                 {availableRounds.map((r) => (
                   <option key={r} value={r}>Тур {r}</option>

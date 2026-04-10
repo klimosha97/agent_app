@@ -241,6 +241,45 @@ async def get_all_players_database(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/players/search", summary="Быстрый поиск игроков (autocomplete)")
+async def search_players(
+    q: str = Query(..., min_length=2, description="Строка поиска (имя игрока)"),
+    tournament_id: Optional[int] = Query(None, description="Фильтр по турниру"),
+    limit: int = Query(20, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    tid_filter = "AND p.tournament_id = :tid" if tournament_id is not None else ""
+    rows = db.execute(text(f"""
+        SELECT p.player_id, p.full_name, p.team_name, p.tournament_id, t.name as tournament_name,
+               pos.code as position_code, pos.display_name as position_name,
+               array_agg(DISTINCT ss.period_value ORDER BY ss.period_value) FILTER (WHERE ss.period_value IS NOT NULL) as seasons
+        FROM players p
+        JOIN tournaments t ON p.tournament_id = t.id
+        LEFT JOIN positions pos ON p.position_id = pos.position_id
+        LEFT JOIN player_statistics ps ON ps.player_id = p.player_id
+        LEFT JOIN stat_slices ss ON ps.slice_id = ss.slice_id AND ss.period_type = 'SEASON'
+        WHERE LOWER(p.full_name) LIKE LOWER(:pattern)
+          {tid_filter}
+        GROUP BY p.player_id, p.full_name, p.team_name, p.tournament_id, t.name, pos.code, pos.display_name
+        ORDER BY p.full_name
+        LIMIT :limit
+    """), {"pattern": f"%{q}%", "tid": tournament_id, "limit": limit}).fetchall()
+
+    return [
+        {
+            "player_id": r[0],
+            "full_name": r[1],
+            "team_name": r[2],
+            "tournament_id": r[3],
+            "tournament_name": r[4],
+            "position_code": r[5],
+            "position_name": r[6],
+            "seasons": r[7] or [],
+        }
+        for r in rows
+    ]
+
+
 @router.get("/tournaments/{tournament_id}/rounds")
 async def get_tournament_rounds(
     tournament_id: int,
@@ -256,6 +295,9 @@ async def get_tournament_rounds(
             FROM stat_slices
             WHERE tournament_id = :tournament_id
               AND period_type = 'ROUND'
+              AND CAST(period_value AS INTEGER) <= (
+                  SELECT COALESCE(current_round, 0) FROM tournaments WHERE id = :tournament_id
+              )
             ORDER BY round_number DESC
         """), {'tournament_id': tournament_id})
         

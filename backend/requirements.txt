@@ -45,6 +45,9 @@ python-jose[cryptography]==3.3.0
 # Дополнительные утилиты
 typing-extensions==4.8.0
 
+# AI / LLM (DeepSeek через OpenAI-совместимый SDK)
+openai>=1.0
+
 
 
 

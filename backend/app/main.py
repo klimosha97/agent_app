@@ -81,8 +81,24 @@ async def lifespan(app: FastAPI):
                 CREATE INDEX IF NOT EXISTS idx_ra_tournament_round
                 ON round_appearances(tournament_id, season, round_number)
             """))
+            session.execute(text("""
+                CREATE TABLE IF NOT EXISTS ai_reviews (
+                    id SERIAL PRIMARY KEY,
+                    tournament_id INT NOT NULL,
+                    round_number INT,
+                    review_type VARCHAR(50) NOT NULL,
+                    player_ids INT[],
+                    content JSONB NOT NULL,
+                    data_hash VARCHAR(64),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            session.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_ai_reviews_lookup
+                ON ai_reviews(tournament_id, round_number, review_type, data_hash)
+            """))
             session.commit()
-            logger.info("watched_players + round_appearances tables ensured")
+            logger.info("watched_players + round_appearances + ai_reviews tables ensured")
         finally:
             session.close()
     except Exception as e:
@@ -240,12 +256,13 @@ async def app_info():
 
 
 # === Подключение API роутеров ===
-from app.api import players, tournaments, upload, analysis
+from app.api import players, tournaments, upload, analysis, ai_agent
 
 app.include_router(players.router, prefix=settings.api_prefix, tags=["Players"])
 app.include_router(tournaments.router, prefix=settings.api_prefix, tags=["Tournaments"])  
 app.include_router(upload.router, prefix=settings.api_prefix, tags=["Upload"])
 app.include_router(analysis.router, prefix=settings.api_prefix, tags=["Analysis"])
+app.include_router(ai_agent.router, prefix=settings.api_prefix, tags=["AI Agent"])
 
 
 # === Статические файлы (для загруженных Excel файлов) ===

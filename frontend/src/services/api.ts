@@ -570,6 +570,59 @@ class ApiService {
     return response.data;
   }
 
+  // === ИИ Скаут-ассистент ===
+
+  async aiRoundReview(tournamentId: number, roundNumber: number): Promise<any> {
+    const response = await this.api.post('/ai/round-review', {
+      tournament_id: tournamentId,
+      round_number: roundNumber,
+    });
+    return response.data;
+  }
+
+  async aiSeasonReview(tournamentId: number): Promise<any> {
+    const response = await this.api.post('/ai/season-review', {
+      tournament_id: tournamentId,
+    });
+    return response.data;
+  }
+
+  async aiPlayerAnalysis(playerId: number): Promise<any> {
+    const response = await this.api.post('/ai/player-analysis', {
+      player_id: playerId,
+    });
+    return response.data;
+  }
+
+  async aiCompare(playerIds: number[]): Promise<any> {
+    const response = await this.api.post('/ai/compare', {
+      player_ids: playerIds,
+    });
+    return response.data;
+  }
+
+  async aiChat(tournamentId: number, question: string, roundNumber?: number): Promise<any> {
+    const response = await this.api.post('/ai/chat', {
+      tournament_id: tournamentId,
+      question,
+      round_number: roundNumber,
+    });
+    return response.data;
+  }
+
+  async aiWatchedReview(tournamentId: number, listType: 'MY' | 'TRACKED'): Promise<any> {
+    const response = await this.api.post('/ai/watched-review', {
+      tournament_id: tournamentId,
+      list_type: listType,
+    });
+    return response.data;
+  }
+
+  async aiWeeklyDigest(): Promise<any> {
+    const response = await this.api.post('/ai/weekly-digest');
+    return response.data;
+  }
+
   // === Методы для работы с кэшем ===
 
   clearCache(): void {
